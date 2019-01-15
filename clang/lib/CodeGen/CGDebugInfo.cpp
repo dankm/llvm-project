@@ -603,7 +603,7 @@ void CGDebugInfo::CreateCompileUnit() {
   if (CSKind)
     CSInfo.emplace(*CSKind, Checksum);
   llvm::DIFile *CUFile = DBuilder.createFile(
-      remapDIPath(MainFileName), remapDIPath(getCurrentDirname()), CSInfo,
+      MainFileName, remapDIPath(getCurrentDirname()), CSInfo,
       getSource(SM, SM.getMainFileID()));
 
   // Create new compile unit.

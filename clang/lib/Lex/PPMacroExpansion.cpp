@@ -29,6 +29,7 @@
 #include "clang/Lex/MacroInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorLexer.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/Token.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -1456,6 +1457,16 @@ static bool isTargetEnvironment(const TargetInfo &TI,
   return TI.getTriple().getEnvironment() == Env.getEnvironment();
 }
 
+static void remapMacroPath(
+    SmallString<128> &Path,
+    const std::map<std::string, std::string, std::greater<std::string>>
+        &MacroPrefixMap) {
+  for (const auto &Entry : MacroPrefixMap)
+    if (Path.startswith(Entry.first)) {
+      Path = (Twine(Entry.second) + Path.substr(Entry.first.size())).str();
+    }
+}
+
 /// ExpandBuiltinMacro - If an identifier token is read that is to be expanded
 /// as a builtin macro, handle it and return the next token as 'Tok'.
 void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
@@ -1523,6 +1534,7 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     if (PLoc.isValid()) {
       FN += PLoc.getFilename();
       Lexer::Stringify(FN);
+      remapMacroPath(FN, PPOpts->MacroPrefixMap);
       OS << '"' << FN << '"';
     }
     Tok.setKind(tok::string_literal);

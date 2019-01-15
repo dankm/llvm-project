@@ -160,7 +160,8 @@ void replace_extension(SmallVectorImpl<char> &path, const Twine &extension,
 ///        start with \a NewPrefix.
 /// @param OldPrefix The path prefix to strip from \a Path.
 /// @param NewPrefix The path prefix to replace \a NewPrefix with.
-void replace_path_prefix(SmallVectorImpl<char> &Path,
+/// @result true if \a Path begins with OldPrefix
+bool replace_path_prefix(SmallVectorImpl<char> &Path,
                          const StringRef &OldPrefix, const StringRef &NewPrefix,
                          Style style = Style::native);
 

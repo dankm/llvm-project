@@ -45,6 +45,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -1458,13 +1459,11 @@ static bool isTargetEnvironment(const TargetInfo &TI,
 }
 
 static void remapMacroPath(
-    SmallString<128> &Path,
+    SmallString<256> &Path,
     const std::map<std::string, std::string, std::greater<std::string>>
         &MacroPrefixMap) {
   for (const auto &Entry : MacroPrefixMap)
-    if (Path.startswith(Entry.first)) {
-      Path = (Twine(Entry.second) + Path.substr(Entry.first.size())).str();
-    }
+    llvm::sys::path::replace_path_prefix(Path, Entry.first, Entry.second);
 }
 
 /// ExpandBuiltinMacro - If an identifier token is read that is to be expanded
@@ -1530,7 +1529,7 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     }
 
     // Escape this filename.  Turn '\' -> '\\' '"' -> '\"'
-    SmallString<128> FN;
+    SmallString<256> FN;
     if (PLoc.isValid()) {
       FN += PLoc.getFilename();
       Lexer::Stringify(FN);

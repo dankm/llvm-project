@@ -531,6 +531,10 @@ void replace_path_prefix(SmallVectorImpl<char> &Path,
   if (!OrigPath.startswith(OldPrefix))
     return;
 
+  if (!is_separator(OldPrefix.back(), style) &&
+      !is_separator(OrigPath[OldPrefix.size()], style))
+    return;
+
   // If prefixes have the same size we can simply copy the new one over.
   if (OldPrefix.size() == NewPrefix.size()) {
     llvm::copy(NewPrefix, Path.begin());
@@ -540,7 +544,12 @@ void replace_path_prefix(SmallVectorImpl<char> &Path,
   StringRef RelPath = OrigPath.substr(OldPrefix.size());
   SmallString<256> NewPath;
   path::append(NewPath, style, NewPrefix);
-  path::append(NewPath, style, RelPath);
+  if (!is_separator(RelPath[0], style))
+    path::append(NewPath, style, RelPath);
+  else
+    path::append(NewPath, style, relative_path(RelPath, style));
+  while (is_separator(NewPath.back(), style))
+    NewPath.set_size(NewPath.size() - 1);
   Path.swap(NewPath);
 }
 

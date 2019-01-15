@@ -473,7 +473,8 @@ CGDebugInfo::createFile(StringRef FileName,
 std::string CGDebugInfo::remapDIPath(StringRef Path) const {
   SmallString<256> p = Path;
   for (const auto &Entry : DebugPrefixMap)
-    llvm::sys::path::replace_path_prefix(p, Entry.first, Entry.second);
+    if (llvm::sys::path::replace_path_prefix(p, Entry.first, Entry.second))
+      break;
   return p.str();
 }
 

@@ -1463,7 +1463,7 @@ static void remapMacroPath(
     const std::map<std::string, std::string, std::greater<std::string>>
         &MacroPrefixMap) {
   for (const auto &Entry : MacroPrefixMap)
-    if(llvm::sys::path::replace_path_prefix(Path, Entry.first, Entry.second))
+    if (llvm::sys::path::replace_path_prefix(Path, Entry.first, Entry.second))
       break;
 }
 

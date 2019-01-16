@@ -528,38 +528,28 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
     return false;
 
   StringRef OrigPath(Path.begin(), Path.size());
+  StringRef Prefix;
 
-  if (!OldPrefix.empty()) {
-    if ((!is_separator(OldPrefix.back(), style) &&
-         !OrigPath.startswith(OldPrefix)) ||
-        (is_separator(OldPrefix.back(), style) &&
-         !OrigPath.startswith(parent_path(OldPrefix, style))))
-      return false;
-
-    if (!is_separator(OldPrefix.back(), style) &&
-        OldPrefix.size() > OrigPath.size())
-      return false;
-
-    if (is_separator(OldPrefix.back(), style) &&
-        parent_path(OldPrefix, style).size() > OrigPath.size())
-      return false;
-
-    if (!is_separator(OldPrefix.back(), style) &&
-        !is_separator(OrigPath[OldPrefix.size()], style))
-      return false;
-
-    if (is_separator(OldPrefix.back(), style) &&
-        !is_separator(OrigPath[OldPrefix.size()], style))
-      return false;
+  if (!OldPrefix.empty() && is_separator(OldPrefix.back())) {
+    Prefix = parent_path(OldPrefix, style);
+  } else {
+    Prefix = OldPrefix;
   }
 
+  if (!OrigPath.startswith(Prefix))
+    return false;
+
+  if (!is_separator(OrigPath[Prefix.size()], style) &&
+      OrigPath.size() > Prefix.size())
+    return false;
+
   // If prefixes have the same size we can simply copy the new one over.
-  if (OldPrefix.size() == NewPrefix.size()) {
+  if (Prefix.size() == NewPrefix.size()) {
     llvm::copy(NewPrefix, Path.begin());
     return true;
   }
 
-  StringRef RelPath = OrigPath.substr(OldPrefix.size());
+  StringRef RelPath = OrigPath.substr(Prefix.size());
   SmallString<256> NewPath;
   path::append(NewPath, style, NewPrefix);
   if (!is_separator(RelPath[0], style))

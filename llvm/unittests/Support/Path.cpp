@@ -1208,7 +1208,9 @@ TEST(Support, RemoveDots) {
 TEST(Support, ReplacePathPrefix) {
   SmallString<64> Path1("/foo");
   SmallString<64> Path2("/old/foo");
+  SmallString<64> Path3("/oldnew/foo");
   SmallString<64> OldPrefix("/old");
+  SmallString<64> OldPrefix2("/old/");
   SmallString<64> NewPrefix("/new");
   SmallString<64> NewPrefix2("/longernew");
   SmallString<64> EmptyPrefix("");
@@ -1228,6 +1230,18 @@ TEST(Support, ReplacePathPrefix) {
   Path = Path2;
   path::replace_path_prefix(Path, OldPrefix, EmptyPrefix);
   EXPECT_EQ(Path, "foo");
+  Path = Path3;
+  path::replace_path_prefix(Path, OldPrefix, NewPrefix);
+  EXPECT_EQ(Path, "/oldnew/foo");
+  Path = Path3;
+  path::replace_path_prefix(Path, OldPrefix2, NewPrefix);
+  EXPECT_EQ(Path, "/oldnew/foo");
+  Path = Path1;
+  path::replace_path_prefix(Path, EmptyPrefix, NewPrefix);
+  EXPECT_EQ(Path, "/new/foo");
+  Path = OldPrefix;
+  path::replace_path_prefix(Path, OldPrefix, NewPrefix);
+  EXPECT_EQ(Path, "/new");
 }
 
 TEST_F(FileSystemTest, OpenFileForRead) {

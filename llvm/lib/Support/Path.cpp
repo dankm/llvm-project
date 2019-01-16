@@ -529,16 +529,29 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
 
   StringRef OrigPath(Path.begin(), Path.size());
 
-  if ((is_separator(OldPrefix.back(), style) &&
-       !OrigPath.startswith(parent_path(OldPrefix, style))) ||
-      (!is_separator(OldPrefix.back(), style) &&
-       !OrigPath.startswith(OldPrefix)))
-    return false;
+  if (!OldPrefix.empty()) {
+    if ((!is_separator(OldPrefix.back(), style) &&
+         !OrigPath.startswith(OldPrefix)) ||
+        (is_separator(OldPrefix.back(), style) &&
+         !OrigPath.startswith(parent_path(OldPrefix, style))))
+      return false;
 
-  if (!is_separator(OldPrefix.back(), style) &&
-      !(OldPrefix == OrigPath ||
-        is_separator(OrigPath[OldPrefix.size()], style)))
-    return false;
+    if (!is_separator(OldPrefix.back(), style) &&
+        OldPrefix.size() > OrigPath.size())
+      return false;
+
+    if (is_separator(OldPrefix.back(), style) &&
+        parent_path(OldPrefix, style).size() > OrigPath.size())
+      return false;
+
+    if (!is_separator(OldPrefix.back(), style) &&
+        !is_separator(OrigPath[OldPrefix.size()], style))
+      return false;
+
+    if (is_separator(OldPrefix.back(), style) &&
+        !is_separator(OrigPath[OldPrefix.size()], style))
+      return false;
+  }
 
   // If prefixes have the same size we can simply copy the new one over.
   if (OldPrefix.size() == NewPrefix.size()) {
@@ -553,8 +566,6 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
     path::append(NewPath, style, RelPath);
   else
     path::append(NewPath, style, relative_path(RelPath, style));
-  while (is_separator(NewPath.back(), style))
-    NewPath.set_size(NewPath.size() - 1);
   Path.swap(NewPath);
 
   return true;

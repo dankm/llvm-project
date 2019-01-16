@@ -475,6 +475,8 @@ std::string CGDebugInfo::remapDIPath(StringRef Path) const {
   for (const auto &Entry : DebugPrefixMap)
     if (llvm::sys::path::replace_path_prefix(p, Entry.first, Entry.second))
       break;
+  while (llvm::sys::path::is_separator(p.back()))
+    p.set_size(p.size() - 1);
   return p.str();
 }
 

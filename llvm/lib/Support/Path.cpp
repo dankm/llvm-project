@@ -528,28 +528,28 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
     return false;
 
   StringRef OrigPath(Path.begin(), Path.size());
-  StringRef Prefix;
+  StringRef OldPrefixDir;
 
-  if (!OldPrefix.empty() && is_separator(OldPrefix.back())) {
-    Prefix = parent_path(OldPrefix, style);
-  } else {
-    Prefix = OldPrefix;
-  }
+  // Ensure OldPrefixDir does not have a trailing separator.
+  if (!OldPrefix.empty() && is_separator(OldPrefix.back()))
+    OldPrefixDir = parent_path(OldPrefix, style);
+  else
+    OldPrefixDir = OldPrefix;
 
-  if (!OrigPath.startswith(Prefix))
+  if (!OrigPath.startswith(OldPrefixDir))
     return false;
 
-  if (!is_separator(OrigPath[Prefix.size()], style) &&
-      OrigPath.size() > Prefix.size())
+  if (!is_separator(OrigPath[OldPrefixDir.size()], style) &&
+      OrigPath.size() > OldPrefixDir.size())
     return false;
 
   // If prefixes have the same size we can simply copy the new one over.
-  if (Prefix.size() == NewPrefix.size()) {
+  if (OldPrefixDir.size() == NewPrefix.size()) {
     llvm::copy(NewPrefix, Path.begin());
     return true;
   }
 
-  StringRef RelPath = OrigPath.substr(Prefix.size());
+  StringRef RelPath = OrigPath.substr(OldPrefixDir.size());
   SmallString<256> NewPath;
   path::append(NewPath, style, NewPrefix);
   if (!is_separator(RelPath[0], style))

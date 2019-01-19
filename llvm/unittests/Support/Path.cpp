@@ -1257,6 +1257,9 @@ TEST(Support, ReplacePathPrefix) {
   Path = OldPrefix;
   path::replace_path_prefix(Path, OldPrefixSep, NewPrefix, true);
   EXPECT_EQ(Path, "/new");
+  Path = OldPrefix;
+  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix, false);
+  EXPECT_EQ(Path, "/new");
 }
 
 TEST_F(FileSystemTest, OpenFileForRead) {

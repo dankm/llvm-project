@@ -523,12 +523,13 @@ void replace_extension(SmallVectorImpl<char> &path, const Twine &extension,
 
 bool replace_path_prefix(SmallVectorImpl<char> &Path,
                          const StringRef &OldPrefix, const StringRef &NewPrefix,
-                         Style style) {
+                         Style style, bool strict) {
   if (OldPrefix.empty() && NewPrefix.empty())
     return false;
 
   StringRef OrigPath(Path.begin(), Path.size());
   StringRef OldPrefixDir;
+  size_t OldPrefixLen = OldPrefix.size();
 
   if (!strict && OldPrefix.size() > OrigPath.size())
     return false;
@@ -542,12 +543,12 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
   if (!OrigPath.startswith(OldPrefixDir))
     return false;
 
-  if (!is_separator(OrigPath[OldPrefixDir.size()], style) &&
-      OrigPath.size() > OldPrefixDir.size())
-    return false;
+  if (OrigPath.size() > OldPrefixDir.size())
+    if (!is_separator(OrigPath[OldPrefixDir.size()], style) && strict)
+      return false;
 
   // If prefixes have the same size we can simply copy the new one over.
-  if (OldPrefixDir.size() == NewPrefix.size()) {
+  if (OldPrefixDir.size() == NewPrefix.size() && !strict) {
     llvm::copy(NewPrefix, Path.begin());
     return true;
   }
@@ -561,7 +562,6 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
     else
       path::append(NewPath, style, relative_path(RelPath, style));
   }
-
   Path.swap(NewPath);
 
   return true;

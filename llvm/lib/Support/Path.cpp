@@ -529,7 +529,9 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
 
   StringRef OrigPath(Path.begin(), Path.size());
   StringRef OldPrefixDir;
-  size_t OldPrefixLen = OldPrefix.size();
+
+  if (!strict && OldPrefix.size() > OrigPath.size())
+    return false;
 
   if (!strict && OldPrefix.size() > OrigPath.size())
     return false;
@@ -562,6 +564,7 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
     else
       path::append(NewPath, style, relative_path(RelPath, style));
   }
+
   Path.swap(NewPath);
 
   return true;

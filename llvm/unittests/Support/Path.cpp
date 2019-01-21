@@ -1229,12 +1229,18 @@ TEST(Support, ReplacePathPrefix) {
   EXPECT_EQ(Path, "/new/foo");
   Path = Path2;
   path::replace_path_prefix(Path, OldPrefix, EmptyPrefix);
+  EXPECT_EQ(Path, "/foo");
+  Path = Path2;
+  path::replace_path_prefix(Path, OldPrefix, EmptyPrefix, true);
   EXPECT_EQ(Path, "foo");
   Path = Path3;
-  path::replace_path_prefix(Path, OldPrefix, NewPrefix);
+  path::replace_path_prefix(Path, OldPrefix, NewPrefix, false);
+  EXPECT_EQ(Path, "/newnew/foo");
+  Path = Path3;
+  path::replace_path_prefix(Path, OldPrefix, NewPrefix, true);
   EXPECT_EQ(Path, "/oldnew/foo");
   Path = Path3;
-  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix);
+  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix, true);
   EXPECT_EQ(Path, "/oldnew/foo");
   Path = Path1;
   path::replace_path_prefix(Path, EmptyPrefix, NewPrefix);
@@ -1246,7 +1252,10 @@ TEST(Support, ReplacePathPrefix) {
   path::replace_path_prefix(Path, OldPrefix, NewPrefix);
   EXPECT_EQ(Path, "/new/");
   Path = OldPrefix;
-  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix);
+  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix, false);
+  EXPECT_EQ(Path, "/old");
+  Path = OldPrefix;
+  path::replace_path_prefix(Path, OldPrefixSep, NewPrefix, true);
   EXPECT_EQ(Path, "/new");
 }
 

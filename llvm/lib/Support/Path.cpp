@@ -530,6 +530,9 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
   StringRef OrigPath(Path.begin(), Path.size());
   StringRef OldPrefixDir;
 
+  if (!strict && OldPrefix.size() > OrigPath.size())
+    return false;
+
   // Ensure OldPrefixDir does not have a trailing separator.
   if (!OldPrefix.empty() && is_separator(OldPrefix.back()))
     OldPrefixDir = parent_path(OldPrefix, style);
@@ -552,10 +555,13 @@ bool replace_path_prefix(SmallVectorImpl<char> &Path,
   StringRef RelPath = OrigPath.substr(OldPrefixDir.size());
   SmallString<256> NewPath;
   path::append(NewPath, style, NewPrefix);
-  if (!is_separator(RelPath[0], style))
-    path::append(NewPath, style, RelPath);
-  else
-    path::append(NewPath, style, relative_path(RelPath, style));
+  if (!RelPath.empty()) {
+    if (!is_separator(RelPath[0], style) || !strict)
+      path::append(NewPath, style, RelPath);
+    else
+      path::append(NewPath, style, relative_path(RelPath, style));
+  }
+
   Path.swap(NewPath);
 
   return true;

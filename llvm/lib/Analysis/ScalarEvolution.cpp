@@ -1,9 +1,8 @@
 //===- ScalarEvolution.cpp - Scalar Evolution Analysis --------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -393,7 +392,7 @@ bool SCEV::isNonConstantNegative() const {
 }
 
 SCEVCouldNotCompute::SCEVCouldNotCompute() :
-  SCEV(FoldingSetNodeIDRef(), scCouldNotCompute) {}
+  SCEV(FoldingSetNodeIDRef(), scCouldNotCompute, 0) {}
 
 bool SCEVCouldNotCompute::classof(const SCEV *S) {
   return S->getSCEVType() == scCouldNotCompute;
@@ -422,7 +421,7 @@ ScalarEvolution::getConstant(Type *Ty, uint64_t V, bool isSigned) {
 
 SCEVCastExpr::SCEVCastExpr(const FoldingSetNodeIDRef ID,
                            unsigned SCEVTy, const SCEV *op, Type *ty)
-  : SCEV(ID, SCEVTy), Op(op), Ty(ty) {}
+  : SCEV(ID, SCEVTy, computeExpressionSize(op)), Op(op), Ty(ty) {}
 
 SCEVTruncateExpr::SCEVTruncateExpr(const FoldingSetNodeIDRef ID,
                                    const SCEV *op, Type *ty)

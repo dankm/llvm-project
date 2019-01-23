@@ -1,9 +1,8 @@
 //===- AsmParser.cpp - Parser for Assembly Files --------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -159,9 +158,10 @@ private:
   /// The values from the last parsed cpp hash file line comment if any.
   struct CppHashInfoTy {
     StringRef Filename;
-    int64_t LineNumber = 0;
+    int64_t LineNumber;
     SMLoc Loc;
-    unsigned Buf = 0;
+    unsigned Buf;
+    CppHashInfoTy() : Filename(), LineNumber(0), Loc(), Buf(0) {}
   };
   CppHashInfoTy CppHashInfo;
 

@@ -1,9 +1,8 @@
 //===- Type.h - C Language Family Type Representation -----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -94,9 +93,6 @@ namespace llvm {
 
     enum { NumLowBitsAvailable = clang::TypeAlignmentInBits };
   };
-
-  template <>
-  struct isPodLike<clang::QualType> { static const bool value = true; };
 
 } // namespace llvm
 
@@ -1986,7 +1982,7 @@ public:
   bool isObjCQualifiedClassType() const;        // Class<foo>
   bool isObjCObjectOrInterfaceType() const;
   bool isObjCIdType() const;                    // id
-
+  bool isDecltypeType() const;
   /// Was this type written with the special inert-in-ARC __unsafe_unretained
   /// qualifier?
   ///
@@ -6442,6 +6438,10 @@ inline bool Type::isObjCSelType() const {
 
 inline bool Type::isObjCBuiltinType() const {
   return isObjCIdType() || isObjCClassType() || isObjCSelType();
+}
+
+inline bool Type::isDecltypeType() const {
+  return isa<DecltypeType>(this);
 }
 
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \

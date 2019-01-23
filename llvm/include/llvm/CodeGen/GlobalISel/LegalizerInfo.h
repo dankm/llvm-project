@@ -1,9 +1,8 @@
 //===- llvm/CodeGen/GlobalISel/LegalizerInfo.h ------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -205,6 +204,12 @@ LegalityPredicate typePairAndMemSizeInSet(
     std::initializer_list<TypePairAndMemSize> TypesAndMemSizeInit);
 /// True iff the specified type index is a scalar.
 LegalityPredicate isScalar(unsigned TypeIdx);
+/// True iff the specified type index is a pointer (with any address space).
+LegalityPredicate isPointer(unsigned TypeIdx);
+/// True iff the specified type index is a pointer with the specified address
+/// space.
+LegalityPredicate isPointer(unsigned TypeIdx, unsigned AddrSpace);
+
 /// True iff the specified type index is a scalar that's narrower than the given
 /// size.
 LegalityPredicate narrowerThan(unsigned TypeIdx, unsigned Size);
@@ -661,8 +666,9 @@ public:
                  Query.Types[TypeIdx].getSizeInBits();
         },
         [=](const LegalityQuery &Query) {
+          LLT T = Query.Types[LargeTypeIdx];
           return std::make_pair(TypeIdx,
-                                Query.Types[LargeTypeIdx].getElementType());
+                                T.isVector() ? T.getElementType() : T);
         });
   }
 

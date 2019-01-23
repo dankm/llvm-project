@@ -1,9 +1,8 @@
 //===- FuzzerLoop.cpp - Fuzzer's main loop --------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 // Fuzzer's main loop.
@@ -852,14 +851,14 @@ void Fuzzer::AnnounceOutput(const uint8_t *Data, size_t Size) {
 
 extern "C" {
 
-__attribute__((visibility("default"))) size_t
+ATTRIBUTE_INTERFACE size_t
 LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize) {
   assert(fuzzer::F);
   return fuzzer::F->GetMD().DefaultMutate(Data, Size, MaxSize);
 }
 
 // Experimental
-__attribute__((visibility("default"))) void
+ATTRIBUTE_INTERFACE void
 LLVMFuzzerAnnounceOutput(const uint8_t *Data, size_t Size) {
   assert(fuzzer::F);
   fuzzer::F->AnnounceOutput(Data, Size);

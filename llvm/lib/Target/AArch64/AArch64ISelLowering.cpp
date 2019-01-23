@@ -1,9 +1,8 @@
 //===-- AArch64ISelLowering.cpp - AArch64 DAG Lowering Implementation  ----===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11601,6 +11600,9 @@ AArch64TargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
 // For the real atomic operations, we have ldxr/stxr up to 128 bits,
 TargetLowering::AtomicExpansionKind
 AArch64TargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
+  if (AI->isFloatingPointOperation())
+    return AtomicExpansionKind::CmpXChg;
+
   unsigned Size = AI->getType()->getPrimitiveSizeInBits();
   if (Size > 128) return AtomicExpansionKind::None;
   // Nand not supported in LSE.
@@ -11655,9 +11657,13 @@ Value *AArch64TargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
       IsAcquire ? Intrinsic::aarch64_ldaxr : Intrinsic::aarch64_ldxr;
   Function *Ldxr = Intrinsic::getDeclaration(M, Int, Tys);
 
-  return Builder.CreateTruncOrBitCast(
-      Builder.CreateCall(Ldxr, Addr),
-      cast<PointerType>(Addr->getType())->getElementType());
+  Type *EltTy = cast<PointerType>(Addr->getType())->getElementType();
+
+  const DataLayout &DL = M->getDataLayout();
+  IntegerType *IntEltTy = Builder.getIntNTy(DL.getTypeSizeInBits(EltTy));
+  Value *Trunc = Builder.CreateTrunc(Builder.CreateCall(Ldxr, Addr), IntEltTy);
+
+  return Builder.CreateBitCast(Trunc, EltTy);
 }
 
 void AArch64TargetLowering::emitAtomicCmpXchgNoStoreLLBalance(
@@ -11691,6 +11697,10 @@ Value *AArch64TargetLowering::emitStoreConditional(IRBuilder<> &Builder,
       IsRelease ? Intrinsic::aarch64_stlxr : Intrinsic::aarch64_stxr;
   Type *Tys[] = { Addr->getType() };
   Function *Stxr = Intrinsic::getDeclaration(M, Int, Tys);
+
+  const DataLayout &DL = M->getDataLayout();
+  IntegerType *IntValTy = Builder.getIntNTy(DL.getTypeSizeInBits(Val->getType()));
+  Val = Builder.CreateBitCast(Val, IntValTy);
 
   return Builder.CreateCall(Stxr,
                             {Builder.CreateZExtOrBitCast(

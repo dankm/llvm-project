@@ -1,9 +1,8 @@
 //===-- SIISelLowering.cpp - SI DAG Lowering Implementation ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,7 +18,6 @@
 
 #include "SIISelLowering.h"
 #include "AMDGPU.h"
-#include "AMDGPUIntrinsicInfo.h"
 #include "AMDGPUSubtarget.h"
 #include "AMDGPUTargetMachine.h"
 #include "SIDefines.h"
@@ -701,6 +699,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   setTargetDAGCombine(ISD::ATOMIC_LOAD_MAX);
   setTargetDAGCombine(ISD::ATOMIC_LOAD_UMIN);
   setTargetDAGCombine(ISD::ATOMIC_LOAD_UMAX);
+  setTargetDAGCombine(ISD::ATOMIC_LOAD_FADD);
 
   setSchedulingPreference(Sched::RegPressure);
 
@@ -5267,12 +5266,6 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     return loadInputValue(DAG, &AMDGPU::VGPR_32RegClass, MVT::i32,
                           SDLoc(DAG.getEntryNode()),
                           MFI->getArgInfo().WorkItemIDZ);
-  case SIIntrinsic::SI_load_const: {
-    SDValue Load =
-        lowerSBuffer(MVT::i32, DL, Op.getOperand(1), Op.getOperand(2),
-                     DAG.getTargetConstant(0, DL, MVT::i1), DAG);
-    return DAG.getNode(ISD::BITCAST, DL, MVT::f32, Load);
-  }
   case Intrinsic::amdgcn_s_buffer_load: {
     unsigned Cache = cast<ConstantSDNode>(Op.getOperand(3))->getZExtValue();
     return lowerSBuffer(VT, DL, Op.getOperand(1), Op.getOperand(2),
@@ -5499,9 +5492,21 @@ SDValue SITargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
                                    M->getVTList(), Ops, M->getMemoryVT(),
                                    M->getMemOperand());
   }
+  case Intrinsic::amdgcn_ds_fadd: {
+    MemSDNode *M = cast<MemSDNode>(Op);
+    unsigned Opc;
+    switch (IntrID) {
+    case Intrinsic::amdgcn_ds_fadd:
+      Opc = ISD::ATOMIC_LOAD_FADD;
+      break;
+    }
+
+    return DAG.getAtomic(Opc, SDLoc(Op), M->getMemoryVT(),
+                         M->getOperand(0), M->getOperand(2), M->getOperand(3),
+                         M->getMemOperand());
+  }
   case Intrinsic::amdgcn_atomic_inc:
   case Intrinsic::amdgcn_atomic_dec:
-  case Intrinsic::amdgcn_ds_fadd:
   case Intrinsic::amdgcn_ds_fmin:
   case Intrinsic::amdgcn_ds_fmax: {
     MemSDNode *M = cast<MemSDNode>(Op);
@@ -5512,9 +5517,6 @@ SDValue SITargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
       break;
     case Intrinsic::amdgcn_atomic_dec:
       Opc = AMDGPUISD::ATOMIC_DEC;
-      break;
-    case Intrinsic::amdgcn_ds_fadd:
-      Opc = AMDGPUISD::ATOMIC_LOAD_FADD;
       break;
     case Intrinsic::amdgcn_ds_fmin:
       Opc = AMDGPUISD::ATOMIC_LOAD_FMIN;
@@ -8934,11 +8936,11 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::ATOMIC_LOAD_MAX:
   case ISD::ATOMIC_LOAD_UMIN:
   case ISD::ATOMIC_LOAD_UMAX:
+  case ISD::ATOMIC_LOAD_FADD:
   case AMDGPUISD::ATOMIC_INC:
   case AMDGPUISD::ATOMIC_DEC:
-  case AMDGPUISD::ATOMIC_LOAD_FADD:
   case AMDGPUISD::ATOMIC_LOAD_FMIN:
-  case AMDGPUISD::ATOMIC_LOAD_FMAX:  // TODO: Target mem intrinsics.
+  case AMDGPUISD::ATOMIC_LOAD_FMAX: // TODO: Target mem intrinsics.
     if (DCI.isBeforeLegalize())
       break;
     return performMemSDNodeCombine(cast<MemSDNode>(N), DCI);
@@ -9298,6 +9300,51 @@ SDNode *SITargetLowering::PostISelFolding(MachineSDNode *Node,
 
     Ops.push_back(ImpDef.getValue(1));
     return DAG.getMachineNode(Opcode, SDLoc(Node), Node->getVTList(), Ops);
+  }
+  case AMDGPU::FLAT_LOAD_UBYTE_D16_HI:
+  case AMDGPU::FLAT_LOAD_SBYTE_D16_HI:
+  case AMDGPU::FLAT_LOAD_SHORT_D16_HI:
+  case AMDGPU::GLOBAL_LOAD_UBYTE_D16_HI:
+  case AMDGPU::GLOBAL_LOAD_SBYTE_D16_HI:
+  case AMDGPU::GLOBAL_LOAD_SHORT_D16_HI:
+  case AMDGPU::DS_READ_U16_D16_HI:
+  case AMDGPU::DS_READ_I8_D16_HI:
+  case AMDGPU::DS_READ_U8_D16_HI:
+  case AMDGPU::BUFFER_LOAD_SHORT_D16_HI_OFFSET:
+  case AMDGPU::BUFFER_LOAD_UBYTE_D16_HI_OFFSET:
+  case AMDGPU::BUFFER_LOAD_SBYTE_D16_HI_OFFSET:
+  case AMDGPU::BUFFER_LOAD_SHORT_D16_HI_OFFEN:
+  case AMDGPU::BUFFER_LOAD_UBYTE_D16_HI_OFFEN:
+  case AMDGPU::BUFFER_LOAD_SBYTE_D16_HI_OFFEN: {
+    // For these loads that write to the HI part of a register,
+    // we should chain them to the op that writes to the LO part
+    // of the register to maintain the order.
+    unsigned NumOps = Node->getNumOperands();
+    SDValue OldChain = Node->getOperand(NumOps-1);
+
+    if (OldChain.getValueType() != MVT::Other)
+      break;
+
+    // Look for the chain to replace to.
+    SDValue Lo = Node->getOperand(NumOps-2);
+    SDNode *LoNode = Lo.getNode();
+    if (LoNode->getNumValues() == 1 ||
+        LoNode->getValueType(LoNode->getNumValues() - 1) != MVT::Other)
+      break;
+
+    SDValue NewChain = Lo.getValue(LoNode->getNumValues() - 1);
+    if (NewChain == OldChain) // Already replaced.
+      break;
+
+    SmallVector<SDValue, 16> Ops;
+    for (unsigned I = 0; I < NumOps-1; ++I)
+      Ops.push_back(Node->getOperand(I));
+    // Repalce the Chain.
+    Ops.push_back(NewChain);
+    MachineSDNode *NewNode = DAG.getMachineNode(Opcode, SDLoc(Node),
+                                                Node->getVTList(), Ops);
+    DAG.setNodeMemRefs(NewNode, Node->memoperands());
+    return NewNode;
   }
   default:
     break;
@@ -9684,4 +9731,30 @@ bool SITargetLowering::isKnownNeverNaNForTargetNode(SDValue Op,
 
   return AMDGPUTargetLowering::isKnownNeverNaNForTargetNode(Op, DAG,
                                                             SNaN, Depth);
+}
+
+TargetLowering::AtomicExpansionKind
+SITargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *RMW) const {
+  switch (RMW->getOperation()) {
+  case AtomicRMWInst::FAdd: {
+    Type *Ty = RMW->getType();
+
+    // We don't have a way to support 16-bit atomics now, so just leave them
+    // as-is.
+    if (Ty->isHalfTy())
+      return AtomicExpansionKind::None;
+
+    if (!Ty->isFloatTy())
+      return AtomicExpansionKind::CmpXChg;
+
+    // TODO: Do have these for flat. Older targets also had them for buffers.
+    unsigned AS = RMW->getPointerAddressSpace();
+    return (AS == AMDGPUAS::LOCAL_ADDRESS && Subtarget->hasLDSFPAtomics()) ?
+      AtomicExpansionKind::None : AtomicExpansionKind::CmpXChg;
+  }
+  default:
+    break;
+  }
+
+  return AMDGPUTargetLowering::shouldExpandAtomicRMWInIR(RMW);
 }

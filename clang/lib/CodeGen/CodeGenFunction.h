@@ -1,9 +1,8 @@
 //===-- CodeGenFunction.h - Per-Function state for LLVM CodeGen -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1836,6 +1835,9 @@ public:
   void EmitLambdaBlockInvokeBody();
   void EmitLambdaDelegatingInvokeBody(const CXXMethodDecl *MD);
   void EmitLambdaStaticInvokeBody(const CXXMethodDecl *MD);
+  void EmitLambdaVLACapture(const VariableArrayType *VAT, LValue LV) {
+    EmitStoreThroughLValue(RValue::get(VLASizeMap[VAT->getSizeExpr()]), LV);
+  }
   void EmitAsanPrologueOrEpilogue(bool Prologue);
 
   /// Emit the unified return block, trying to avoid its emission when
@@ -2618,10 +2620,12 @@ public:
   bool sanitizePerformTypeCheck() const;
 
   /// Emit a check that \p V is the address of storage of the
-  /// appropriate size and alignment for an object of type \p Type.
+  /// appropriate size and alignment for an object of type \p Type
+  /// (or if ArraySize is provided, for an array of that bound).
   void EmitTypeCheck(TypeCheckKind TCK, SourceLocation Loc, llvm::Value *V,
                      QualType Type, CharUnits Alignment = CharUnits::Zero(),
-                     SanitizerSet SkippedChecks = SanitizerSet());
+                     SanitizerSet SkippedChecks = SanitizerSet(),
+                     llvm::Value *ArraySize = nullptr);
 
   /// Emit a check that \p Base points into an array object, which
   /// we can access at index \p Index. \p Accessed should be \c false if we
@@ -3560,7 +3564,6 @@ public:
 
   LValue EmitCXXConstructLValue(const CXXConstructExpr *E);
   LValue EmitCXXBindTemporaryLValue(const CXXBindTemporaryExpr *E);
-  LValue EmitLambdaLValue(const LambdaExpr *E);
   LValue EmitCXXTypeidLValue(const CXXTypeidExpr *E);
   LValue EmitCXXUuidofLValue(const CXXUuidofExpr *E);
 
@@ -3981,8 +3984,6 @@ public:
   void enterNonTrivialFullExpression(const FullExpr *E);
 
   void EmitCXXThrowExpr(const CXXThrowExpr *E, bool KeepInsertionPoint = true);
-
-  void EmitLambdaExpr(const LambdaExpr *E, AggValueSlot Dest);
 
   RValue EmitAtomicExpr(AtomicExpr *E);
 

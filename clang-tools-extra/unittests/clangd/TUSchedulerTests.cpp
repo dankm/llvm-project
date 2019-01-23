@@ -1,9 +1,8 @@
 //===-- TUSchedulerTests.cpp ------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,7 +38,8 @@ class TUSchedulerTests : public ::testing::Test {
 protected:
   ParseInputs getInputs(PathRef File, std::string Contents) {
     return ParseInputs{*CDB.getCompileCommand(File),
-                       buildTestFS(Files, Timestamps), std::move(Contents)};
+                       buildTestFS(Files, Timestamps), std::move(Contents),
+                       tidy::ClangTidyOptions::getDefaults()};
   }
 
   void updateWithCallback(TUScheduler &S, PathRef File,

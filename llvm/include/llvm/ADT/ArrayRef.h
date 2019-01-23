@@ -1,9 +1,8 @@
 //===- ArrayRef.h - Array Reference Wrapper ---------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -45,6 +44,7 @@ namespace llvm {
     using const_iterator = const T *;
     using size_type = size_t;
     using reverse_iterator = std::reverse_iterator<iterator>;
+    using value_type = typename std::remove_cv<T>::type;
 
   private:
     /// The start of the array, in an external buffer.
@@ -525,12 +525,6 @@ namespace llvm {
   }
 
   /// @}
-
-  // ArrayRefs can be treated like a POD type.
-  template <typename T> struct isPodLike;
-  template <typename T> struct isPodLike<ArrayRef<T>> {
-    static const bool value = true;
-  };
 
   template <typename T> hash_code hash_value(ArrayRef<T> S) {
     return hash_combine_range(S.begin(), S.end());

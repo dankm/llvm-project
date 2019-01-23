@@ -1,9 +1,8 @@
 //===--- CGExprCXX.cpp - Emit LLVM Code for C++ expressions ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1715,10 +1714,16 @@ llvm::Value *CodeGenFunction::EmitCXXNewExpr(const CXXNewExpr *E) {
                      result.getAlignment());
 
   // Emit sanitizer checks for pointer value now, so that in the case of an
-  // array it was checked only once and not at each constructor call.
+  // array it was checked only once and not at each constructor call. We may
+  // have already checked that the pointer is non-null.
+  // FIXME: If we have an array cookie and a potentially-throwing allocator,
+  // we'll null check the wrong pointer here.
+  SanitizerSet SkippedChecks;
+  SkippedChecks.set(SanitizerKind::Null, nullCheck);
   EmitTypeCheck(CodeGenFunction::TCK_ConstructorCall,
-      E->getAllocatedTypeSourceInfo()->getTypeLoc().getBeginLoc(),
-      result.getPointer(), allocType);
+                E->getAllocatedTypeSourceInfo()->getTypeLoc().getBeginLoc(),
+                result.getPointer(), allocType, result.getAlignment(),
+                SkippedChecks, numElements);
 
   EmitNewInitializer(*this, E, allocType, elementTy, result, numElements,
                      allocSizeWithoutCookie);
@@ -2252,22 +2257,4 @@ llvm::Value *CodeGenFunction::EmitDynamicCast(Address ThisAddr,
   }
 
   return Value;
-}
-
-void CodeGenFunction::EmitLambdaExpr(const LambdaExpr *E, AggValueSlot Slot) {
-  LValue SlotLV = MakeAddrLValue(Slot.getAddress(), E->getType());
-
-  CXXRecordDecl::field_iterator CurField = E->getLambdaClass()->field_begin();
-  for (LambdaExpr::const_capture_init_iterator i = E->capture_init_begin(),
-                                               e = E->capture_init_end();
-       i != e; ++i, ++CurField) {
-    // Emit initialization
-    LValue LV = EmitLValueForFieldInitialization(SlotLV, *CurField);
-    if (CurField->hasCapturedVLAType()) {
-      auto VAT = CurField->getCapturedVLAType();
-      EmitStoreThroughLValue(RValue::get(VLASizeMap[VAT->getSizeExpr()]), LV);
-    } else {
-      EmitInitializerForField(*CurField, LV, *i);
-    }
-  }
 }

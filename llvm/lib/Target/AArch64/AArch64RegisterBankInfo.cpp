@@ -1,9 +1,8 @@
 //===- AArch64RegisterBankInfo.cpp ----------------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -249,6 +248,9 @@ const RegisterBank &AArch64RegisterBankInfo::getRegBankFromRegClass(
   case AArch64::GPR64spRegClassID:
   case AArch64::GPR64sponlyRegClassID:
   case AArch64::GPR64allRegClassID:
+  case AArch64::GPR64noipRegClassID:
+  case AArch64::GPR64common_and_GPR64noipRegClassID:
+  case AArch64::GPR64noip_and_tcGPR64RegClassID:
   case AArch64::tcGPR64RegClassID:
   case AArch64::WSeqPairsClassRegClassID:
   case AArch64::XSeqPairsClassRegClassID:

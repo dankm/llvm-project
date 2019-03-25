@@ -131,13 +131,14 @@ ABI Changes in Clang
 - ...
 
 OpenMP Support in Clang
-----------------------------------
+-----------------------
 
-- ...
+- Added emission of the debug information for NVPTX target devices.
 
 CUDA Support in Clang
 ---------------------
 
+- Added emission of the debug information for the device code.
 
 Internal API Changes
 --------------------
@@ -145,6 +146,19 @@ Internal API Changes
 These are major API changes that have happened since the 8.0.0 release of
 Clang. If upgrading an external codebase that uses Clang as a library,
 this section should help get you past the largest hurdles of upgrading.
+
+Build System Changes
+--------------------
+
+These are major changes to the build system that have happened since the 8.0.0
+release of Clang. Users of the build system should adjust accordingly.
+
+- In 8.0.0 and below, the install-clang-headers target would install clang's
+  resource directory headers. This installation is now performed by the
+  install-clang-resource-headers target. Users of the old install-clang-headers
+  target should switch to the new install-clang-resource-headers target. The
+  install-clang-headers target now installs clang's API headers (corresponding
+  to its libraries), which is consistent with the install-llvm-headers target.
 
 -  ...
 
@@ -156,13 +170,19 @@ AST Matchers
 clang-format
 ------------
 
-
-- ...
+- Add language support for clang-formatting C# files
+- Add Microsoft coding style to encapsulate default C# formatting style
+- Added new option `PPDIS_BeforeHash` (in configuration: `BeforeHash`) to
+  `IndentPPDirectives` which indents preprocessor directives before the hash.
 
 libclang
 --------
 
-...
+- When `CINDEXTEST_INCLUDE_ATTRIBUTED_TYPES` is not provided when making a
+  CXType, the equivalent type of the AttributedType is returned instead of the
+  modified type if the user does not want attribute sugar. The equivalent type
+  represents the minimally-desugared type which the AttributedType is
+  canonically equivalent to.
 
 
 Static Analyzer

@@ -41,8 +41,7 @@ SystemInitializerCommon::SystemInitializerCommon() {}
 
 SystemInitializerCommon::~SystemInitializerCommon() {}
 
-llvm::Error
-SystemInitializerCommon::Initialize(const InitializerOptions &options) {
+llvm::Error SystemInitializerCommon::Initialize() {
 #if defined(_MSC_VER)
   const char *disable_crash_dialog_var = getenv("LLDB_DISABLE_CRASH_DIALOG");
   if (disable_crash_dialog_var &&
@@ -65,16 +64,30 @@ SystemInitializerCommon::Initialize(const InitializerOptions &options) {
   }
 #endif
 
-  ReproducerMode mode = ReproducerMode::Off;
-  if (options.reproducer_capture)
-    mode = ReproducerMode::Capture;
-  if (options.reproducer_replay)
-    mode = ReproducerMode::Replay;
+  // If the reproducer wasn't initialized before, we can safely assume it's
+  // off.
+  if (!Reproducer::Initialized()) {
+    if (auto e = Reproducer::Initialize(ReproducerMode::Off, llvm::None))
+      return e;
+  }
 
-  if (auto e = Reproducer::Initialize(mode, FileSpec(options.reproducer_path)))
-    return e;
+  // Initialize the file system.
+  auto &r = repro::Reproducer::Instance();
+  if (repro::Loader *loader = r.GetLoader()) {
+    FileSpec vfs_mapping = loader->GetFile<FileInfo>();
+    if (vfs_mapping) {
+      if (llvm::Error e = FileSystem::Initialize(vfs_mapping))
+        return e;
+    } else {
+      FileSystem::Initialize();
+    }
+  } else if (repro::Generator *g = r.GetGenerator()) {
+    repro::FileProvider &fp = g->GetOrCreate<repro::FileProvider>();
+    FileSystem::Initialize(fp.GetFileCollector());
+  } else {
+    FileSystem::Initialize();
+  }
 
-  FileSystem::Initialize();
   Log::Initialize();
   HostInfo::Initialize();
   static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);

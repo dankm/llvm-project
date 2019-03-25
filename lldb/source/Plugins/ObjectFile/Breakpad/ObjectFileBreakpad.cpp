@@ -32,13 +32,13 @@ llvm::Optional<Header> Header::parse(llvm::StringRef text) {
     return llvm::None;
 
   llvm::Triple triple;
-  triple.setArch(Module->getArch());
-  triple.setOS(Module->getOS());
+  triple.setArch(Module->Arch);
+  triple.setOS(Module->OS);
 
   std::tie(line, text) = text.split('\n');
 
   auto Info = InfoRecord::parse(line);
-  UUID uuid = Info && Info->getID() ? Info->getID() : Module->getID();
+  UUID uuid = Info && Info->ID ? Info->ID : Module->ID;
   return Header{ArchSpec(triple), std::move(uuid)};
 }
 
@@ -122,15 +122,10 @@ Symtab *ObjectFileBreakpad::GetSymtab() {
   return nullptr;
 }
 
-bool ObjectFileBreakpad::GetUUID(UUID *uuid) {
-  *uuid = m_uuid;
-  return true;
-}
-
 void ObjectFileBreakpad::CreateSections(SectionList &unified_section_list) {
-  if (m_sections_ap)
+  if (m_sections_up)
     return;
-  m_sections_ap = llvm::make_unique<SectionList>();
+  m_sections_up = llvm::make_unique<SectionList>();
 
   llvm::Optional<Record::Kind> current_section;
   offset_t section_start;
@@ -146,7 +141,7 @@ void ObjectFileBreakpad::CreateSections(SectionList &unified_section_list) {
         ConstString(toString(*current_section)), eSectionTypeOther,
         /*file_vm_addr*/ 0, /*vm_size*/ 0, section_start,
         end_offset - section_start, /*log2align*/ 0, /*flags*/ 0);
-    m_sections_ap->AddSection(section_sp);
+    m_sections_up->AddSection(section_sp);
     unified_section_list.AddSection(section_sp);
   };
   while (!text.empty()) {

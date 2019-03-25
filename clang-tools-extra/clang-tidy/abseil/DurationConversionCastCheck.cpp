@@ -37,21 +37,22 @@ void DurationConversionCastCheck::check(
   const auto *MatchedCast =
       Result.Nodes.getNodeAs<ExplicitCastExpr>("cast_expr");
 
-  if (!isNotInMacro(Result, MatchedCast))
+  if (isInMacro(Result, MatchedCast))
     return;
 
   const auto *FuncDecl = Result.Nodes.getNodeAs<FunctionDecl>("func_decl");
   const auto *Arg = Result.Nodes.getNodeAs<Expr>("arg");
   StringRef ConversionFuncName = FuncDecl->getName();
 
-  llvm::Optional<DurationScale> Scale = getScaleForInverse(ConversionFuncName);
+  llvm::Optional<DurationScale> Scale =
+      getScaleForDurationInverse(ConversionFuncName);
   if (!Scale)
     return;
 
   // Casting a double to an integer.
   if (MatchedCast->getTypeAsWritten()->isIntegerType() &&
       ConversionFuncName.contains("Double")) {
-    llvm::StringRef NewFuncName = getInverseForScale(*Scale).second;
+    llvm::StringRef NewFuncName = getDurationInverseForScale(*Scale).second;
 
     diag(MatchedCast->getBeginLoc(),
          "duration should be converted directly to an integer rather than "
@@ -66,7 +67,7 @@ void DurationConversionCastCheck::check(
   // Casting an integer to a double.
   if (MatchedCast->getTypeAsWritten()->isRealFloatingType() &&
       ConversionFuncName.contains("Int64")) {
-    llvm::StringRef NewFuncName = getInverseForScale(*Scale).first;
+    llvm::StringRef NewFuncName = getDurationInverseForScale(*Scale).first;
 
     diag(MatchedCast->getBeginLoc(), "duration should be converted directly to "
                                      "a floating-piont number rather than "

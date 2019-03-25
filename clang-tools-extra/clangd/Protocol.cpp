@@ -13,7 +13,6 @@
 #include "Protocol.h"
 #include "Logger.h"
 #include "URI.h"
-#include "index/Index.h"
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallString.h"
@@ -210,6 +209,61 @@ SymbolKind adjustKindToCapability(SymbolKind Kind,
   default:
     return SymbolKind::String;
   }
+}
+
+SymbolKind indexSymbolKindToSymbolKind(index::SymbolKind Kind) {
+  switch (Kind) {
+  case index::SymbolKind::Unknown:
+    return SymbolKind::Variable;
+  case index::SymbolKind::Module:
+    return SymbolKind::Module;
+  case index::SymbolKind::Namespace:
+    return SymbolKind::Namespace;
+  case index::SymbolKind::NamespaceAlias:
+    return SymbolKind::Namespace;
+  case index::SymbolKind::Macro:
+    return SymbolKind::String;
+  case index::SymbolKind::Enum:
+    return SymbolKind::Enum;
+  case index::SymbolKind::Struct:
+    return SymbolKind::Struct;
+  case index::SymbolKind::Class:
+    return SymbolKind::Class;
+  case index::SymbolKind::Protocol:
+    return SymbolKind::Interface;
+  case index::SymbolKind::Extension:
+    return SymbolKind::Interface;
+  case index::SymbolKind::Union:
+    return SymbolKind::Class;
+  case index::SymbolKind::TypeAlias:
+    return SymbolKind::Class;
+  case index::SymbolKind::Function:
+    return SymbolKind::Function;
+  case index::SymbolKind::Variable:
+    return SymbolKind::Variable;
+  case index::SymbolKind::Field:
+    return SymbolKind::Field;
+  case index::SymbolKind::EnumConstant:
+    return SymbolKind::EnumMember;
+  case index::SymbolKind::InstanceMethod:
+  case index::SymbolKind::ClassMethod:
+  case index::SymbolKind::StaticMethod:
+    return SymbolKind::Method;
+  case index::SymbolKind::InstanceProperty:
+  case index::SymbolKind::ClassProperty:
+  case index::SymbolKind::StaticProperty:
+    return SymbolKind::Property;
+  case index::SymbolKind::Constructor:
+  case index::SymbolKind::Destructor:
+    return SymbolKind::Method;
+  case index::SymbolKind::ConversionFunction:
+    return SymbolKind::Function;
+  case index::SymbolKind::Parameter:
+    return SymbolKind::Variable;
+  case index::SymbolKind::Using:
+    return SymbolKind::Namespace;
+  }
+  llvm_unreachable("invalid symbol kind");
 }
 
 bool fromJSON(const llvm::json::Value &Params, ClientCapabilities &R) {
@@ -421,6 +475,9 @@ bool fromJSON(const llvm::json::Value &Params, WorkspaceEdit &R) {
 
 const llvm::StringLiteral ExecuteCommandParams::CLANGD_APPLY_FIX_COMMAND =
     "clangd.applyFix";
+const llvm::StringLiteral ExecuteCommandParams::CLANGD_APPLY_TWEAK =
+    "clangd.applyTweak";
+
 bool fromJSON(const llvm::json::Value &Params, ExecuteCommandParams &R) {
   llvm::json::ObjectMapper O(Params);
   if (!O || !O.map("command", R.command))
@@ -431,6 +488,8 @@ bool fromJSON(const llvm::json::Value &Params, ExecuteCommandParams &R) {
     return Args && Args->size() == 1 &&
            fromJSON(Args->front(), R.workspaceEdit);
   }
+  if (R.command == ExecuteCommandParams::CLANGD_APPLY_TWEAK)
+    return Args && Args->size() == 1 && fromJSON(Args->front(), R.tweakArgs);
   return false; // Unrecognized command.
 }
 
@@ -455,25 +514,25 @@ bool operator==(const SymbolDetails &LHS, const SymbolDetails &RHS) {
 }
 
 llvm::json::Value toJSON(const SymbolDetails &P) {
-  llvm::json::Object result{{"name", llvm::json::Value(nullptr)},
+  llvm::json::Object Result{{"name", llvm::json::Value(nullptr)},
                             {"containerName", llvm::json::Value(nullptr)},
                             {"usr", llvm::json::Value(nullptr)},
                             {"id", llvm::json::Value(nullptr)}};
 
   if (!P.name.empty())
-    result["name"] = P.name;
+    Result["name"] = P.name;
 
   if (!P.containerName.empty())
-    result["containerName"] = P.containerName;
+    Result["containerName"] = P.containerName;
 
   if (!P.USR.empty())
-    result["usr"] = P.USR;
+    Result["usr"] = P.USR;
 
   if (P.ID.hasValue())
-    result["id"] = P.ID.getValue().str();
+    Result["id"] = P.ID.getValue().str();
 
   // Older clang cannot compile 'return Result', even though it is legal.
-  return llvm::json::Value(std::move(result));
+  return llvm::json::Value(std::move(Result));
 }
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &O, const SymbolDetails &S) {
@@ -497,10 +556,13 @@ llvm::json::Value toJSON(const Command &C) {
   auto Cmd = llvm::json::Object{{"title", C.title}, {"command", C.command}};
   if (C.workspaceEdit)
     Cmd["arguments"] = {*C.workspaceEdit};
+  if (C.tweakArgs)
+    Cmd["arguments"] = {*C.tweakArgs};
   return std::move(Cmd);
 }
 
 const llvm::StringLiteral CodeAction::QUICKFIX_KIND = "quickfix";
+const llvm::StringLiteral CodeAction::REFACTOR_KIND = "refactor";
 
 llvm::json::Value toJSON(const CodeAction &CA) {
   auto CodeAction = llvm::json::Object{{"title", CA.title}};
@@ -544,6 +606,17 @@ llvm::json::Value toJSON(const WorkspaceEdit &WE) {
   return llvm::json::Object{{"changes", std::move(FileChanges)}};
 }
 
+bool fromJSON(const llvm::json::Value &Params, TweakArgs &A) {
+  llvm::json::ObjectMapper O(Params);
+  return O && O.map("file", A.file) && O.map("selection", A.selection) &&
+         O.map("tweakID", A.tweakID);
+}
+
+llvm::json::Value toJSON(const TweakArgs &A) {
+  return llvm::json::Object{
+      {"tweakID", A.tweakID}, {"selection", A.selection}, {"file", A.file}};
+}
+
 llvm::json::Value toJSON(const ApplyWorkspaceEditParams &Params) {
   return llvm::json::Object{{"edit", Params.edit}};
 }
@@ -559,10 +632,10 @@ bool fromJSON(const llvm::json::Value &Params, CompletionContext &R) {
   if (!O)
     return false;
 
-  int triggerKind;
-  if (!O.map("triggerKind", triggerKind))
+  int TriggerKind;
+  if (!O.map("triggerKind", TriggerKind))
     return false;
-  R.triggerKind = static_cast<CompletionTriggerKind>(triggerKind);
+  R.triggerKind = static_cast<CompletionTriggerKind>(TriggerKind);
 
   if (auto *TC = Params.getAsObject()->get("triggerCharacter"))
     return fromJSON(*TC, R.triggerCharacter);
@@ -619,11 +692,11 @@ bool fromJSON(const llvm::json::Value &E, CompletionItemKind &Out) {
 
 CompletionItemKind
 adjustKindToCapability(CompletionItemKind Kind,
-                       CompletionItemKindBitset &supportedCompletionItemKinds) {
+                       CompletionItemKindBitset &SupportedCompletionItemKinds) {
   auto KindVal = static_cast<size_t>(Kind);
   if (KindVal >= CompletionItemKindMin &&
-      KindVal <= supportedCompletionItemKinds.size() &&
-      supportedCompletionItemKinds[KindVal])
+      KindVal <= SupportedCompletionItemKinds.size() &&
+      SupportedCompletionItemKinds[KindVal])
     return Kind;
 
   switch (Kind) {
@@ -791,6 +864,66 @@ bool fromJSON(const llvm::json::Value &Params, InitializationOptions &Opts) {
   O.map("compilationDatabasePath", Opts.compilationDatabasePath);
   O.map("fallbackFlags", Opts.fallbackFlags);
   O.map("clangdFileStatus", Opts.FileStatus);
+  return true;
+}
+
+bool fromJSON(const llvm::json::Value &E, TypeHierarchyDirection &Out) {
+  auto T = E.getAsInteger();
+  if (!T)
+    return false;
+  if (*T < static_cast<int>(TypeHierarchyDirection::Children) ||
+      *T > static_cast<int>(TypeHierarchyDirection::Both))
+    return false;
+  Out = static_cast<TypeHierarchyDirection>(*T);
+  return true;
+}
+
+bool fromJSON(const llvm::json::Value &Params, TypeHierarchyParams &R) {
+  llvm::json::ObjectMapper O(Params);
+  return O && O.map("textDocument", R.textDocument) &&
+         O.map("position", R.position) && O.map("resolve", R.resolve) &&
+         O.map("direction", R.direction);
+}
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &O,
+                              const TypeHierarchyItem &I) {
+  return O << I.name << " - " << toJSON(I);
+}
+
+llvm::json::Value toJSON(const TypeHierarchyItem &I) {
+  llvm::json::Object Result{{"name", I.name},
+                            {"kind", static_cast<int>(I.kind)},
+                            {"range", I.range},
+                            {"selectionRange", I.selectionRange},
+                            {"uri", I.uri}};
+
+  if (I.detail)
+    Result["detail"] = I.detail;
+  if (I.deprecated)
+    Result["deprecated"] = I.deprecated;
+  if (I.parents)
+    Result["parents"] = I.parents;
+  if (I.children)
+    Result["children"] = I.children;
+  return std::move(Result);
+}
+
+bool fromJSON(const llvm::json::Value &Params, TypeHierarchyItem &I) {
+  llvm::json::ObjectMapper O(Params);
+
+  // Required fields.
+  if (!(O && O.map("name", I.name) && O.map("kind", I.kind) &&
+        O.map("uri", I.uri) && O.map("range", I.range) &&
+        O.map("selectionRange", I.selectionRange))) {
+    return false;
+  }
+
+  // Optional fields.
+  O.map("detail", I.detail);
+  O.map("deprecated", I.deprecated);
+  O.map("parents", I.parents);
+  O.map("children", I.children);
+
   return true;
 }
 

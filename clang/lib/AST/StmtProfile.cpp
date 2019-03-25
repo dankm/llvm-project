@@ -457,6 +457,11 @@ void OMPClauseProfiler::VisitOMPSimdlenClause(const OMPSimdlenClause *C) {
     Profiler->VisitStmt(C->getSimdlen());
 }
 
+void OMPClauseProfiler::VisitOMPAllocatorClause(const OMPAllocatorClause *C) {
+  if (C->getAllocator())
+    Profiler->VisitStmt(C->getAllocator());
+}
+
 void OMPClauseProfiler::VisitOMPCollapseClause(const OMPCollapseClause *C) {
   if (C->getNumForLoops())
     Profiler->VisitStmt(C->getNumForLoops());
@@ -1259,13 +1264,14 @@ void StmtProfiler::VisitBlockExpr(const BlockExpr *S) {
 
 void StmtProfiler::VisitGenericSelectionExpr(const GenericSelectionExpr *S) {
   VisitExpr(S);
-  for (unsigned i = 0; i != S->getNumAssocs(); ++i) {
-    QualType T = S->getAssocType(i);
+  for (const GenericSelectionExpr::ConstAssociation &Assoc :
+       S->associations()) {
+    QualType T = Assoc.getType();
     if (T.isNull())
       ID.AddPointer(nullptr);
     else
       VisitType(T);
-    VisitExpr(S->getAssocExpr(i));
+    VisitExpr(Assoc.getAssociationExpr());
   }
 }
 

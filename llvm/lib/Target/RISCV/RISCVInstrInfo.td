@@ -10,8 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-include "RISCVInstrFormats.td"
-
 //===----------------------------------------------------------------------===//
 // RISC-V specific DAG Nodes.
 //===----------------------------------------------------------------------===//
@@ -51,6 +49,9 @@ def riscv_selectcc  : SDNode<"RISCVISD::SELECT_CC", SDT_RISCVSelectCC,
 def riscv_tail      : SDNode<"RISCVISD::TAIL", SDT_RISCVCall,
                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                               SDNPVariadic]>;
+def riscv_sllw      : SDNode<"RISCVISD::SLLW", SDTIntShiftOp>;
+def riscv_sraw      : SDNode<"RISCVISD::SRAW", SDTIntShiftOp>;
+def riscv_srlw      : SDNode<"RISCVISD::SRLW", SDTIntShiftOp>;
 
 //===----------------------------------------------------------------------===//
 // Operand and SDNode transformation definitions.
@@ -238,6 +239,12 @@ def HI20 : SDNodeXForm<imm, [{
 }]>;
 
 //===----------------------------------------------------------------------===//
+// Instruction Formats
+//===----------------------------------------------------------------------===//
+
+include "RISCVInstrFormats.td"
+
+//===----------------------------------------------------------------------===//
 // Instruction Class Templates
 //===----------------------------------------------------------------------===//
 
@@ -312,7 +319,7 @@ class Priv<string opcodestr, bits<7> funct7>
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
-let isReMaterializable = 1 in
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in
 def LUI : RVInstU<OPC_LUI, (outs GPR:$rd), (ins uimm20_lui:$imm20),
                   "lui", "$rd, $imm20">;
 
@@ -348,13 +355,17 @@ def SW : Store_rri<0b010, "sw">;
 
 // ADDI isn't always rematerializable, but isReMaterializable will be used as
 // a hint which is verified in isReallyTriviallyReMaterializable.
-let isReMaterializable = 1 in
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in
 def ADDI  : ALU_ri<0b000, "addi">;
 
 def SLTI  : ALU_ri<0b010, "slti">;
 def SLTIU : ALU_ri<0b011, "sltiu">;
+
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 def XORI  : ALU_ri<0b100, "xori">;
 def ORI   : ALU_ri<0b110, "ori">;
+}
+
 def ANDI  : ALU_ri<0b111, "andi">;
 
 def SLLI : Shift_ri<0, 0b001, "slli">;
@@ -490,12 +501,6 @@ def SFENCE_VMA : RVInstR<0b0001001, 0b000, OPC_SYSTEM, (outs),
 // Assembler Pseudo Instructions (User-Level ISA, Version 2.2, Chapter 20)
 //===----------------------------------------------------------------------===//
 
-// TODO la
-// TODO lb lh lw
-// TODO RV64I: ld
-// TODO sb sh sw
-// TODO RV64I: sd
-
 def : InstAlias<"nop",           (ADDI      X0,      X0,       0)>;
 
 // Note that the size is 32 because up to 8 32-bit instructions are needed to
@@ -506,6 +511,22 @@ let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Size = 32,
     isCodeGenOnly = 0, isAsmParserOnly = 1 in
 def PseudoLI : Pseudo<(outs GPR:$rd), (ins ixlenimm_li:$imm), [],
                       "li", "$rd, $imm">;
+
+def PseudoLB  : PseudoLoad<"lb">;
+def PseudoLBU : PseudoLoad<"lbu">;
+def PseudoLH  : PseudoLoad<"lh">;
+def PseudoLHU : PseudoLoad<"lhu">;
+def PseudoLW  : PseudoLoad<"lw">;
+
+def PseudoSB  : PseudoStore<"sb">;
+def PseudoSH  : PseudoStore<"sh">;
+def PseudoSW  : PseudoStore<"sw">;
+
+let Predicates = [IsRV64] in {
+def PseudoLWU : PseudoLoad<"lwu">;
+def PseudoLD  : PseudoLoad<"ld">;
+def PseudoSD  : PseudoStore<"sd">;
+} // Predicates = [IsRV64]
 
 def : InstAlias<"mv $rd, $rs",   (ADDI GPR:$rd, GPR:$rs,       0)>;
 def : InstAlias<"not $rd, $rs",  (XORI GPR:$rd, GPR:$rs,      -1)>;
@@ -598,6 +619,24 @@ def : InstAlias<"sfence.vma",     (SFENCE_VMA      X0, X0)>;
 def : InstAlias<"sfence.vma $rs", (SFENCE_VMA GPR:$rs, X0)>;
 
 let EmitPriority = 0 in {
+def : InstAlias<"lb $rd, (${rs1})",
+                (LB  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"lh $rd, (${rs1})",
+                (LH  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"lw $rd, (${rs1})",
+                (LW  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"lbu $rd, (${rs1})",
+                (LBU  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"lhu $rd, (${rs1})",
+                (LHU  GPR:$rd, GPR:$rs1, 0)>;
+
+def : InstAlias<"sb $rs2, (${rs1})",
+                (SB  GPR:$rs2, GPR:$rs1, 0)>;
+def : InstAlias<"sh $rs2, (${rs1})",
+                (SH  GPR:$rs2, GPR:$rs1, 0)>;
+def : InstAlias<"sw $rs2, (${rs1})",
+                (SW  GPR:$rs2, GPR:$rs1, 0)>;
+
 def : InstAlias<"add $rd, $rs1, $imm12",
                 (ADDI  GPR:$rd, GPR:$rs1, simm12:$imm12)>;
 def : InstAlias<"and $rd, $rs1, $imm12",
@@ -613,6 +652,13 @@ def : InstAlias<"srl $rd, $rs1, $shamt",
 def : InstAlias<"sra $rd, $rs1, $shamt",
                 (SRAI  GPR:$rd, GPR:$rs1, uimmlog2xlen:$shamt)>;
 let Predicates = [IsRV64] in {
+def : InstAlias<"lwu $rd, (${rs1})",
+                (LWU  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"ld $rd, (${rs1})",
+                (LD  GPR:$rd, GPR:$rs1, 0)>;
+def : InstAlias<"sd $rs2, (${rs1})",
+                (SD  GPR:$rs2, GPR:$rs1, 0)>;
+
 def : InstAlias<"addw $rd, $rs1, $imm12",
                 (ADDIW  GPR:$rd, GPR:$rs1, simm12:$imm12)>;
 def : InstAlias<"sllw $rd, $rs1, $shamt",
@@ -668,21 +714,9 @@ def sexti32 : PatFrags<(ops node:$src),
 def assertzexti32 : PatFrag<(ops node:$src), (assertzext node:$src), [{
   return cast<VTSDNode>(N->getOperand(1))->getVT() == MVT::i32;
 }]>;
-def assertzexti5 : PatFrag<(ops node:$src), (assertzext node:$src), [{
-  return cast<VTSDNode>(N->getOperand(1))->getVT().getSizeInBits() <= 5;
-}]>;
 def zexti32 : PatFrags<(ops node:$src),
                        [(and node:$src, 0xffffffff),
                         (assertzexti32 node:$src)]>;
-// Defines a legal mask for (assertzexti5 (and src, mask)) to be combinable
-// with a shiftw operation. The mask mustn't modify the lower 5 bits or the
-// upper 32 bits.
-def shiftwamt_mask : ImmLeaf<XLenVT, [{
-  return countTrailingOnes<uint64_t>(Imm) >= 5 && isUInt<32>(Imm);
-}]>;
-def shiftwamt : PatFrags<(ops node:$src),
-                         [(assertzexti5 (and node:$src, shiftwamt_mask)),
-                          (assertzexti5 node:$src)]>;
 
 /// Immediates
 
@@ -850,6 +884,11 @@ let hasSideEffects = 0, mayLoad = 0, mayStore = 0, isCodeGenOnly = 0,
 def PseudoLLA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                        "lla", "$dst, $src">;
 
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0, isCodeGenOnly = 0,
+    isAsmParserOnly = 1 in
+def PseudoLA : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
+                      "la", "$dst, $src">;
+
 /// Loads
 
 multiclass LdPat<PatFrag LoadOp, RVInst Inst> {
@@ -942,28 +981,9 @@ def : Pat<(sext_inreg (shl GPR:$rs1, uimm5:$shamt), i32),
 def : Pat<(sra (sext_inreg GPR:$rs1, i32), uimm5:$shamt),
           (SRAIW GPR:$rs1, uimm5:$shamt)>;
 
-// For variable-length shifts, we rely on assertzexti5 being inserted during
-// lowering (see RISCVTargetLowering::PerformDAGCombine). This enables us to
-// guarantee that selecting a 32-bit variable shift is legal (as the variable
-// shift is known to be <= 32). We must also be careful not to create
-// semantically incorrect patterns. For instance, selecting SRLW for
-// (srl (zexti32 GPR:$rs1), (shiftwamt GPR:$rs2)),
-// is not guaranteed to be safe, as we don't know whether the upper 32-bits of
-// the result are used or not (in the case where rs2=0, this is a
-// sign-extension operation).
-
-def : Pat<(sext_inreg (shl GPR:$rs1, (shiftwamt GPR:$rs2)), i32),
-          (SLLW GPR:$rs1, GPR:$rs2)>;
-def : Pat<(zexti32 (shl GPR:$rs1, (shiftwamt GPR:$rs2))),
-          (SRLI (SLLI (SLLW GPR:$rs1, GPR:$rs2), 32), 32)>;
-
-def : Pat<(sext_inreg (srl (zexti32 GPR:$rs1), (shiftwamt GPR:$rs2)), i32),
-          (SRLW GPR:$rs1, GPR:$rs2)>;
-def : Pat<(zexti32 (srl (zexti32 GPR:$rs1), (shiftwamt GPR:$rs2))),
-          (SRLI (SLLI (SRLW GPR:$rs1, GPR:$rs2), 32), 32)>;
-
-def : Pat<(sra (sexti32 GPR:$rs1), (shiftwamt GPR:$rs2)),
-          (SRAW GPR:$rs1, GPR:$rs2)>;
+def : PatGprGpr<riscv_sllw, SLLW>;
+def : PatGprGpr<riscv_srlw, SRLW>;
+def : PatGprGpr<riscv_sraw, SRAW>;
 
 /// Loads
 

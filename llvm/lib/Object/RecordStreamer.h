@@ -46,8 +46,7 @@ private:
 public:
   RecordStreamer(MCContext &Context, const Module &M);
 
-  void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
-                       bool) override;
+  void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI) override;
   void EmitLabel(MCSymbol *Symbol, SMLoc Loc = SMLoc()) override;
   void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) override;
   bool EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute) override;
@@ -55,6 +54,15 @@ public:
                     unsigned ByteAlignment, SMLoc Loc = SMLoc()) override;
   void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                         unsigned ByteAlignment) override;
+
+  // Ignore COFF-specific directives; we do not need any information from them,
+  // but the default implementation of these methods crashes, so we override
+  // them with versions that do nothing.
+  void BeginCOFFSymbolDef(const MCSymbol *Symbol) override {}
+  void EmitCOFFSymbolStorageClass(int StorageClass) override {}
+  void EmitCOFFSymbolType(int Type) override {}
+  void EndCOFFSymbolDef() override {}
+
   /// Record .symver aliases for later processing.
   void emitELFSymverDirective(StringRef AliasName,
                               const MCSymbol *Aliasee) override;

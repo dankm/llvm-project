@@ -1589,7 +1589,7 @@ DEF_TRAVERSE_DECL(OMPThreadPrivateDecl, {
     TRY_TO(TraverseStmt(I));
   }
  })
- 
+
 DEF_TRAVERSE_DECL(OMPRequiresDecl, {
   for (auto *C : D->clauselists()) {
     TRY_TO(TraverseOMPClause(C));
@@ -1604,7 +1604,21 @@ DEF_TRAVERSE_DECL(OMPDeclareReductionDecl, {
   return true;
 })
 
+DEF_TRAVERSE_DECL(OMPDeclareMapperDecl, {
+  for (auto *C : D->clauselists())
+    TRY_TO(TraverseOMPClause(C));
+  TRY_TO(TraverseType(D->getType()));
+  return true;
+})
+
 DEF_TRAVERSE_DECL(OMPCapturedExprDecl, { TRY_TO(TraverseVarHelper(D)); })
+
+DEF_TRAVERSE_DECL(OMPAllocateDecl, {
+  for (auto *I : D->varlists())
+    TRY_TO(TraverseStmt(I));
+  for (auto *C : D->clauselists())
+    TRY_TO(TraverseOMPClause(C));
+})
 
 // A helper method for TemplateDecl's children.
 template <typename Derived>
@@ -2300,10 +2314,10 @@ bool RecursiveASTVisitor<Derived>::TraverseInitListExpr(
 // generic associations).
 DEF_TRAVERSE_STMT(GenericSelectionExpr, {
   TRY_TO(TraverseStmt(S->getControllingExpr()));
-  for (unsigned i = 0; i != S->getNumAssocs(); ++i) {
-    if (TypeSourceInfo *TS = S->getAssocTypeSourceInfo(i))
-      TRY_TO(TraverseTypeLoc(TS->getTypeLoc()));
-    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getAssocExpr(i));
+  for (const GenericSelectionExpr::Association &Assoc : S->associations()) {
+    if (TypeSourceInfo *TSI = Assoc.getTypeSourceInfo())
+      TRY_TO(TraverseTypeLoc(TSI->getTypeLoc()));
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(Assoc.getAssociationExpr());
   }
   ShouldVisitChildren = false;
 })
@@ -2790,6 +2804,7 @@ bool RecursiveASTVisitor<Derived>::TraverseOMPClause(OMPClause *C) {
     break;
 #include "clang/Basic/OpenMPKinds.def"
   case OMPC_threadprivate:
+  case OMPC_allocate:
   case OMPC_uniform:
   case OMPC_unknown:
     break;
@@ -2809,6 +2824,13 @@ bool RecursiveASTVisitor<Derived>::VisitOMPClauseWithPostUpdate(
     OMPClauseWithPostUpdate *Node) {
   TRY_TO(VisitOMPClauseWithPreInit(Node));
   TRY_TO(TraverseStmt(Node->getPostUpdateExpr()));
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPAllocatorClause(
+    OMPAllocatorClause *C) {
+  TRY_TO(TraverseStmt(C->getAllocator()));
   return true;
 }
 

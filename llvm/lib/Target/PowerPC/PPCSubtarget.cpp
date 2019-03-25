@@ -107,6 +107,7 @@ void PPCSubtarget::initializeEnvironment() {
   IsISA3_0 = false;
   UseLongCalls = false;
   SecurePlt = false;
+  VectorsUseTwoUnits = false;
 
   HasPOPCNTD = POPCNTD_Unavailable;
 }
@@ -136,6 +137,9 @@ void PPCSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   // Set up darwin-specific properties.
   if (isDarwin())
     HasLazyResolverStubs = true;
+
+  if (TargetTriple.isOSNetBSD() || TargetTriple.isOSOpenBSD())
+    SecurePlt = true;
 
   if (HasSPE && IsPPC64)
     report_fatal_error( "SPE is only supported for 32-bit targets.\n", false);

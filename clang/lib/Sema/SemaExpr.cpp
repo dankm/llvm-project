@@ -310,6 +310,19 @@ bool Sema::DiagnoseUseOfDecl(NamedDecl *D, ArrayRef<SourceLocation> Locs,
     return true;
   }
 
+  // [OpenMP 5.0], 2.19.7.3. declare mapper Directive, Restrictions
+  //  List-items in map clauses on this construct may only refer to the declared
+  //  variable var and entities that could be referenced by a procedure defined
+  //  at the same location
+  auto *DMD = dyn_cast<OMPDeclareMapperDecl>(CurContext);
+  if (LangOpts.OpenMP && DMD && !CurContext->containsDecl(D) &&
+      isa<VarDecl>(D)) {
+    Diag(Loc, diag::err_omp_declare_mapper_wrong_var)
+        << DMD->getVarName().getAsString();
+    Diag(D->getLocation(), diag::note_entity_declared_at) << D;
+    return true;
+  }
+
   DiagnoseAvailabilityOfDecl(D, Locs, UnknownObjCClass, ObjCPropertyAccess,
                              AvoidPartialAvailabilityChecks, ClassReceiver);
 
@@ -318,17 +331,6 @@ bool Sema::DiagnoseUseOfDecl(NamedDecl *D, ArrayRef<SourceLocation> Locs,
   diagnoseUseOfInternalDeclInInlineFunction(*this, D, Loc);
 
   return false;
-}
-
-/// Retrieve the message suffix that should be added to a
-/// diagnostic complaining about the given function being deleted or
-/// unavailable.
-std::string Sema::getDeletedOrUnavailableSuffix(const FunctionDecl *FD) {
-  std::string Message;
-  if (FD->getAvailability(&Message))
-    return ": " + Message;
-
-  return std::string();
 }
 
 /// DiagnoseSentinelCalls - This routine checks whether a call or
@@ -737,33 +739,20 @@ ExprResult Sema::DefaultArgumentPromotion(Expr *E) {
     return ExprError();
   E = Res.get();
 
-  QualType ScalarTy = Ty;
-  unsigned NumElts = 0;
-  if (const ExtVectorType *VecTy = Ty->getAs<ExtVectorType>()) {
-    NumElts = VecTy->getNumElements();
-    ScalarTy = VecTy->getElementType();
-  }
-
   // If this is a 'float'  or '__fp16' (CVR qualified or typedef)
   // promote to double.
   // Note that default argument promotion applies only to float (and
   // half/fp16); it does not apply to _Float16.
-  const BuiltinType *BTy = ScalarTy->getAs<BuiltinType>();
+  const BuiltinType *BTy = Ty->getAs<BuiltinType>();
   if (BTy && (BTy->getKind() == BuiltinType::Half ||
               BTy->getKind() == BuiltinType::Float)) {
     if (getLangOpts().OpenCL &&
         !getOpenCLOptions().isEnabled("cl_khr_fp64")) {
-      if (BTy->getKind() == BuiltinType::Half) {
-        QualType Ty = Context.FloatTy;
-        if (NumElts != 0)
-          Ty = Context.getExtVectorType(Ty, NumElts);
-        E = ImpCastExprToType(E, Ty, CK_FloatingCast).get();
-      }
+        if (BTy->getKind() == BuiltinType::Half) {
+            E = ImpCastExprToType(E, Context.FloatTy, CK_FloatingCast).get();
+        }
     } else {
-      QualType Ty = Context.DoubleTy;
-      if (NumElts != 0)
-        Ty = Context.getExtVectorType(Ty, NumElts);
-      E = ImpCastExprToType(E, Ty, CK_FloatingCast).get();
+      E = ImpCastExprToType(E, Context.DoubleTy, CK_FloatingCast).get();
     }
   }
 
@@ -922,8 +911,9 @@ ExprResult Sema::DefaultVariadicArgumentPromotion(Expr *E, VariadicCallType CT,
     UnqualifiedId Name;
     Name.setIdentifier(PP.getIdentifierInfo("__builtin_trap"),
                        E->getBeginLoc());
-    ExprResult TrapFn = ActOnIdExpression(TUScope, SS, TemplateKWLoc,
-                                          Name, true, false);
+    ExprResult TrapFn = ActOnIdExpression(TUScope, SS, TemplateKWLoc, Name,
+                                          /*HasTrailingLParen=*/true,
+                                          /*IsAddressOfOperand=*/false);
     if (TrapFn.isInvalid())
       return ExprError();
 
@@ -1534,9 +1524,9 @@ Sema::CreateGenericSelectionExpr(SourceLocation KeyLoc,
   // If we determined that the generic selection is result-dependent, don't
   // try to compute the result expression.
   if (IsResultDependent)
-    return new (Context) GenericSelectionExpr(
-        Context, KeyLoc, ControllingExpr, Types, Exprs, DefaultLoc, RParenLoc,
-        ContainsUnexpandedParameterPack);
+    return GenericSelectionExpr::Create(Context, KeyLoc, ControllingExpr, Types,
+                                        Exprs, DefaultLoc, RParenLoc,
+                                        ContainsUnexpandedParameterPack);
 
   SmallVector<unsigned, 1> CompatIndices;
   unsigned DefaultIndex = -1U;
@@ -1587,7 +1577,7 @@ Sema::CreateGenericSelectionExpr(SourceLocation KeyLoc,
   unsigned ResultIndex =
     CompatIndices.size() ? CompatIndices[0] : DefaultIndex;
 
-  return new (Context) GenericSelectionExpr(
+  return GenericSelectionExpr::Create(
       Context, KeyLoc, ControllingExpr, Types, Exprs, DefaultLoc, RParenLoc,
       ContainsUnexpandedParameterPack, ResultIndex);
 }
@@ -1916,11 +1906,10 @@ static void emitEmptyLookupTypoDiagnostic(
 /// Diagnose an empty lookup.
 ///
 /// \return false if new lookup candidates were found
-bool
-Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
-                          std::unique_ptr<CorrectionCandidateCallback> CCC,
-                          TemplateArgumentListInfo *ExplicitTemplateArgs,
-                          ArrayRef<Expr *> Args, TypoExpr **Out) {
+bool Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
+                               CorrectionCandidateCallback &CCC,
+                               TemplateArgumentListInfo *ExplicitTemplateArgs,
+                               ArrayRef<Expr *> Args, TypoExpr **Out) {
   DeclarationName Name = R.getLookupName();
 
   unsigned diagnostic = diag::err_undeclared_var_use;
@@ -2009,7 +1998,7 @@ Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
     assert(!ExplicitTemplateArgs &&
            "Diagnosing an empty lookup with explicit template args!");
     *Out = CorrectTypoDelayed(
-        R.getLookupNameInfo(), R.getLookupKind(), S, &SS, std::move(CCC),
+        R.getLookupNameInfo(), R.getLookupKind(), S, &SS, CCC,
         [=](const TypoCorrection &TC) {
           emitEmptyLookupTypoDiagnostic(TC, *this, SS, Name, TypoLoc, Args,
                                         diagnostic, diagnostic_suggest);
@@ -2017,9 +2006,9 @@ Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
         nullptr, CTK_ErrorRecovery);
     if (*Out)
       return true;
-  } else if (S && (Corrected =
-                       CorrectTypo(R.getLookupNameInfo(), R.getLookupKind(), S,
-                                   &SS, std::move(CCC), CTK_ErrorRecovery))) {
+  } else if (S &&
+             (Corrected = CorrectTypo(R.getLookupNameInfo(), R.getLookupKind(),
+                                      S, &SS, CCC, CTK_ErrorRecovery))) {
     std::string CorrectedStr(Corrected.getAsString(getLangOpts()));
     bool DroppedSpecifier =
         Corrected.WillReplaceSpecifier() && Name.getAsString() == CorrectedStr;
@@ -2168,7 +2157,7 @@ ExprResult
 Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
                         SourceLocation TemplateKWLoc, UnqualifiedId &Id,
                         bool HasTrailingLParen, bool IsAddressOfOperand,
-                        std::unique_ptr<CorrectionCandidateCallback> CCC,
+                        CorrectionCandidateCallback *CCC,
                         bool IsInlineAsmIdentifier, Token *KeywordReplacement) {
   assert(!(IsAddressOfOperand && HasTrailingLParen) &&
          "cannot be direct & operand and have a trailing lparen");
@@ -2290,9 +2279,9 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     // If this name wasn't predeclared and if this is not a function
     // call, diagnose the problem.
     TypoExpr *TE = nullptr;
-    auto DefaultValidator = llvm::make_unique<CorrectionCandidateCallback>(
-        II, SS.isValid() ? SS.getScopeRep() : nullptr);
-    DefaultValidator->IsAddressOfOperand = IsAddressOfOperand;
+    DefaultFilterCCC DefaultValidator(II, SS.isValid() ? SS.getScopeRep()
+                                                       : nullptr);
+    DefaultValidator.IsAddressOfOperand = IsAddressOfOperand;
     assert((!CCC || CCC->IsAddressOfOperand == IsAddressOfOperand) &&
            "Typo correction callback misconfigured");
     if (CCC) {
@@ -2304,9 +2293,8 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     // FIXME: DiagnoseEmptyLookup produces bad diagnostics if we're looking for
     // a template name, but we happen to have always already looked up the name
     // before we get here if it must be a template name.
-    if (DiagnoseEmptyLookup(S, SS, R,
-                            CCC ? std::move(CCC) : std::move(DefaultValidator),
-                            nullptr, None, &TE)) {
+    if (DiagnoseEmptyLookup(S, SS, R, CCC ? *CCC : DefaultValidator, nullptr,
+                            None, &TE)) {
       if (TE && KeywordReplacement) {
         auto &State = getTypoExprState(TE);
         auto BestTC = State.Consumer->getNextCorrection();
@@ -2560,8 +2548,10 @@ Sema::LookupInObjCMethod(LookupResult &Lookup, Scope *S,
       SelfName.setKind(UnqualifiedIdKind::IK_ImplicitSelfParam);
       CXXScopeSpec SelfScopeSpec;
       SourceLocation TemplateKWLoc;
-      ExprResult SelfExpr = ActOnIdExpression(S, SelfScopeSpec, TemplateKWLoc,
-                                              SelfName, false, false);
+      ExprResult SelfExpr =
+          ActOnIdExpression(S, SelfScopeSpec, TemplateKWLoc, SelfName,
+                            /*HasTrailingLParen=*/false,
+                            /*IsAddressOfOperand=*/false);
       if (SelfExpr.isInvalid())
         return ExprError();
 
@@ -2660,10 +2650,15 @@ Sema::PerformObjectMemberConversion(Expr *From,
   bool PointerConversions = false;
   if (isa<FieldDecl>(Member)) {
     DestRecordType = Context.getCanonicalType(Context.getTypeDeclType(RD));
+    auto FromPtrType = FromType->getAs<PointerType>();
+    DestRecordType = Context.getAddrSpaceQualType(
+        DestRecordType, FromPtrType
+                            ? FromType->getPointeeType().getAddressSpace()
+                            : FromType.getAddressSpace());
 
-    if (FromType->getAs<PointerType>()) {
+    if (FromPtrType) {
       DestType = Context.getPointerType(DestRecordType);
-      FromRecordType = FromType->getPointeeType();
+      FromRecordType = FromPtrType->getPointeeType();
       PointerConversions = true;
     } else {
       DestType = DestRecordType;
@@ -2993,7 +2988,6 @@ ExprResult Sema::BuildDeclarationNameExpr(
 
     // These shouldn't make it here.
     case Decl::ObjCAtDefsField:
-    case Decl::ObjCIvar:
       llvm_unreachable("forming non-member reference to ivar?");
 
     // Enum constants are always r-values and never references.
@@ -3001,6 +2995,7 @@ ExprResult Sema::BuildDeclarationNameExpr(
     case Decl::EnumConstant:
     case Decl::UnresolvedUsingValue:
     case Decl::OMPDeclareReduction:
+    case Decl::OMPDeclareMapper:
       valueKind = VK_RValue;
       break;
 
@@ -3010,6 +3005,7 @@ ExprResult Sema::BuildDeclarationNameExpr(
     // exist in the high-level semantics.
     case Decl::Field:
     case Decl::IndirectField:
+    case Decl::ObjCIvar:
       assert(getLangOpts().CPlusPlus &&
              "building reference to field in C?");
 
@@ -4898,7 +4894,7 @@ Sema::getVariadicCallType(FunctionDecl *FDecl, const FunctionProtoType *Proto,
 }
 
 namespace {
-class FunctionCallCCC : public FunctionCallFilterCCC {
+class FunctionCallCCC final : public FunctionCallFilterCCC {
 public:
   FunctionCallCCC(Sema &SemaRef, const IdentifierInfo *FuncName,
                   unsigned NumArgs, MemberExpr *ME)
@@ -4914,6 +4910,10 @@ public:
     return FunctionCallFilterCCC::ValidateCandidate(candidate);
   }
 
+  std::unique_ptr<CorrectionCandidateCallback> clone() override {
+    return llvm::make_unique<FunctionCallCCC>(*this);
+  }
+
 private:
   const IdentifierInfo *const FunctionName;
 };
@@ -4926,11 +4926,10 @@ static TypoCorrection TryTypoCorrectionForCall(Sema &S, Expr *Fn,
   DeclarationName FuncName = FDecl->getDeclName();
   SourceLocation NameLoc = ME ? ME->getMemberLoc() : Fn->getBeginLoc();
 
+  FunctionCallCCC CCC(S, FuncName.getAsIdentifierInfo(), Args.size(), ME);
   if (TypoCorrection Corrected = S.CorrectTypo(
           DeclarationNameInfo(FuncName, NameLoc), Sema::LookupOrdinaryName,
-          S.getScopeForContext(S.CurContext), nullptr,
-          llvm::make_unique<FunctionCallCCC>(S, FuncName.getAsIdentifierInfo(),
-                                             Args.size(), ME),
+          S.getScopeForContext(S.CurContext), nullptr, CCC,
           Sema::CTK_ErrorRecovery)) {
     if (NamedDecl *ND = Corrected.getFoundDecl()) {
       if (Corrected.isOverloaded()) {
@@ -5228,15 +5227,29 @@ Sema::CheckStaticArrayArgument(SourceLocation CallLoc,
     return;
 
   const ConstantArrayType *ArgCAT =
-    Context.getAsConstantArrayType(ArgExpr->IgnoreParenImpCasts()->getType());
+    Context.getAsConstantArrayType(ArgExpr->IgnoreParenCasts()->getType());
   if (!ArgCAT)
     return;
 
-  if (ArgCAT->getSize().ult(CAT->getSize())) {
+  if (getASTContext().hasSameUnqualifiedType(CAT->getElementType(),
+                                             ArgCAT->getElementType())) {
+    if (ArgCAT->getSize().ult(CAT->getSize())) {
+      Diag(CallLoc, diag::warn_static_array_too_small)
+          << ArgExpr->getSourceRange()
+          << (unsigned)ArgCAT->getSize().getZExtValue()
+          << (unsigned)CAT->getSize().getZExtValue() << 0;
+      DiagnoseCalleeStaticArrayParam(*this, Param);
+    }
+    return;
+  }
+
+  Optional<CharUnits> ArgSize =
+      getASTContext().getTypeSizeInCharsIfKnown(ArgCAT);
+  Optional<CharUnits> ParmSize = getASTContext().getTypeSizeInCharsIfKnown(CAT);
+  if (ArgSize && ParmSize && *ArgSize < *ParmSize) {
     Diag(CallLoc, diag::warn_static_array_too_small)
-      << ArgExpr->getSourceRange()
-      << (unsigned) ArgCAT->getSize().getZExtValue()
-      << (unsigned) CAT->getSize().getZExtValue();
+        << ArgExpr->getSourceRange() << (unsigned)ArgSize->getQuantity()
+        << (unsigned)ParmSize->getQuantity() << 1;
     DiagnoseCalleeStaticArrayParam(*this, Param);
   }
 }
@@ -5778,18 +5791,36 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   }
 
   if (!getLangOpts().CPlusPlus) {
+    // Forget about the nulled arguments since typo correction
+    // do not handle them well.
+    TheCall->shrinkNumArgs(Args.size());
     // C cannot always handle TypoExpr nodes in builtin calls and direct
     // function calls as their argument checking don't necessarily handle
     // dependent types properly, so make sure any TypoExprs have been
     // dealt with.
     ExprResult Result = CorrectDelayedTyposInExpr(TheCall);
     if (!Result.isUsable()) return ExprError();
+    CallExpr *TheOldCall = TheCall;
     TheCall = dyn_cast<CallExpr>(Result.get());
+    bool CorrectedTypos = TheCall != TheOldCall;
     if (!TheCall) return Result;
-    // TheCall at this point has max(Args.size(), NumParams) arguments,
-    // with extra arguments nulled. We don't want to introduce nulled
-    // arguments in Args and so we only take the first Args.size() arguments.
-    Args = llvm::makeArrayRef(TheCall->getArgs(), Args.size());
+    Args = llvm::makeArrayRef(TheCall->getArgs(), TheCall->getNumArgs());
+
+    // A new call expression node was created if some typos were corrected.
+    // However it may not have been constructed with enough storage. In this
+    // case, rebuild the node with enough storage. The waste of space is
+    // immaterial since this only happens when some typos were corrected.
+    if (CorrectedTypos && Args.size() < NumParams) {
+      if (Config)
+        TheCall = CUDAKernelCallExpr::Create(
+            Context, Fn, cast<CallExpr>(Config), Args, ResultTy, VK_RValue,
+            RParenLoc, NumParams);
+      else
+        TheCall = CallExpr::Create(Context, Fn, Args, ResultTy, VK_RValue,
+                                   RParenLoc, NumParams, UsesADL);
+    }
+    // We can now handle the nulled arguments for the default arguments.
+    TheCall->setNumArgsUnsafe(std::max<unsigned>(Args.size(), NumParams));
   }
 
   // Bail out early if calling a builtin with custom type checking.
@@ -5892,6 +5923,8 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   if (FDecl) {
     if (CheckFunctionCall(FDecl, TheCall, Proto))
       return ExprError();
+
+    checkFortifiedBuiltinMemoryFunction(FDecl, TheCall);
 
     if (BuiltinID)
       return CheckBuiltinFunctionCall(FDecl, BuiltinID, TheCall);
@@ -6119,6 +6152,7 @@ CastKind Sema::PrepareScalarCast(ExprResult &Src, QualType DestTy) {
     case Type::STK_Bool:
       return CK_FixedPointToBoolean;
     case Type::STK_Integral:
+      return CK_FixedPointToIntegral;
     case Type::STK_Floating:
     case Type::STK_IntegralComplex:
     case Type::STK_FloatingComplex:
@@ -6163,10 +6197,7 @@ CastKind Sema::PrepareScalarCast(ExprResult &Src, QualType DestTy) {
     case Type::STK_MemberPointer:
       llvm_unreachable("member pointer type in C");
     case Type::STK_FixedPoint:
-      Diag(Src.get()->getExprLoc(),
-           diag::err_unimplemented_conversion_with_fixed_point_type)
-          << SrcTy;
-      return CK_IntegralCast;
+      return CK_IntegralToFixedPoint;
     }
     llvm_unreachable("Should have returned before this");
 
@@ -12399,6 +12430,14 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
     }
   }
 
+  // Diagnose operations on the unsupported types for OpenMP device compilation.
+  if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice) {
+    if (Opc != BO_Assign && Opc != BO_Comma) {
+      checkOpenMPDeviceExpr(LHSExpr);
+      checkOpenMPDeviceExpr(RHSExpr);
+    }
+  }
+
   switch (Opc) {
   case BO_Assign:
     ResultTy = CheckAssignmentOperands(LHS.get(), RHS, OpLoc, QualType());
@@ -12410,6 +12449,25 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
     if (!ResultTy.isNull()) {
       DiagnoseSelfAssignment(*this, LHS.get(), RHS.get(), OpLoc, true);
       DiagnoseSelfMove(LHS.get(), RHS.get(), OpLoc);
+
+      // Avoid copying a block to the heap if the block is assigned to a local
+      // auto variable that is declared in the same scope as the block. This
+      // optimization is unsafe if the local variable is declared in an outer
+      // scope. For example:
+      //
+      // BlockTy b;
+      // {
+      //   b = ^{...};
+      // }
+      // // It is unsafe to invoke the block here if it wasn't copied to the
+      // // heap.
+      // b();
+
+      if (auto *BE = dyn_cast<BlockExpr>(RHS.get()->IgnoreParens()))
+        if (auto *DRE = dyn_cast<DeclRefExpr>(LHS.get()->IgnoreParens()))
+          if (auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+            if (VD->hasLocalStorage() && getCurScope()->isDeclScope(VD))
+              BE->getBlockDecl()->setCanAvoidCopyToHeap();
     }
     RecordModifiableNonNullParam(*this, LHS.get());
     break;
@@ -12975,6 +13033,13 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
                        << Input.get()->getSourceRange());
     }
   }
+  // Diagnose operations on the unsupported types for OpenMP device compilation.
+  if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice) {
+    if (UnaryOperator::isIncrementDecrementOp(Opc) ||
+        UnaryOperator::isArithmeticOp(Opc))
+      checkOpenMPDeviceExpr(InputExpr);
+  }
+
   switch (Opc) {
   case UO_PreInc:
   case UO_PreDec:
@@ -13268,29 +13333,6 @@ ExprResult Sema::ActOnAddrLabel(SourceLocation OpLoc, SourceLocation LabLoc,
                                      Context.getPointerType(Context.VoidTy));
 }
 
-/// Given the last statement in a statement-expression, check whether
-/// the result is a producing expression (like a call to an
-/// ns_returns_retained function) and, if so, rebuild it to hoist the
-/// release out of the full-expression.  Otherwise, return null.
-/// Cannot fail.
-static Expr *maybeRebuildARCConsumingStmt(Stmt *Statement) {
-  // Should always be wrapped with one of these.
-  ExprWithCleanups *cleanups = dyn_cast<ExprWithCleanups>(Statement);
-  if (!cleanups) return nullptr;
-
-  ImplicitCastExpr *cast = dyn_cast<ImplicitCastExpr>(cleanups->getSubExpr());
-  if (!cast || cast->getCastKind() != CK_ARCConsumeObject)
-    return nullptr;
-
-  // Splice out the cast.  This shouldn't modify any interesting
-  // features of the statement.
-  Expr *producer = cast->getSubExpr();
-  assert(producer->getType() == cast->getType());
-  assert(producer->getValueKind() == cast->getValueKind());
-  cleanups->setSubExpr(producer);
-  return cleanups;
-}
-
 void Sema::ActOnStartStmtExpr() {
   PushExpressionEvaluationContext(ExprEvalContexts.back().Context);
 }
@@ -13324,47 +13366,10 @@ Sema::ActOnStmtExpr(SourceLocation LPLoc, Stmt *SubStmt,
   QualType Ty = Context.VoidTy;
   bool StmtExprMayBindToTemp = false;
   if (!Compound->body_empty()) {
-    Stmt *LastStmt = Compound->body_back();
-    LabelStmt *LastLabelStmt = nullptr;
-    // If LastStmt is a label, skip down through into the body.
-    while (LabelStmt *Label = dyn_cast<LabelStmt>(LastStmt)) {
-      LastLabelStmt = Label;
-      LastStmt = Label->getSubStmt();
-    }
-
-    if (Expr *LastE = dyn_cast<Expr>(LastStmt)) {
-      // Do function/array conversion on the last expression, but not
-      // lvalue-to-rvalue.  However, initialize an unqualified type.
-      ExprResult LastExpr = DefaultFunctionArrayConversion(LastE);
-      if (LastExpr.isInvalid())
-        return ExprError();
-      Ty = LastExpr.get()->getType().getUnqualifiedType();
-
-      if (!Ty->isDependentType() && !LastExpr.get()->isTypeDependent()) {
-        // In ARC, if the final expression ends in a consume, splice
-        // the consume out and bind it later.  In the alternate case
-        // (when dealing with a retainable type), the result
-        // initialization will create a produce.  In both cases the
-        // result will be +1, and we'll need to balance that out with
-        // a bind.
-        if (Expr *rebuiltLastStmt
-              = maybeRebuildARCConsumingStmt(LastExpr.get())) {
-          LastExpr = rebuiltLastStmt;
-        } else {
-          LastExpr = PerformCopyInitialization(
-              InitializedEntity::InitializeStmtExprResult(LPLoc, Ty),
-              SourceLocation(), LastExpr);
-        }
-
-        if (LastExpr.isInvalid())
-          return ExprError();
-        if (LastExpr.get() != nullptr) {
-          if (!LastLabelStmt)
-            Compound->setLastStmt(LastExpr.get());
-          else
-            LastLabelStmt->setSubStmt(LastExpr.get());
-          StmtExprMayBindToTemp = true;
-        }
+    if (const auto *LastStmt = dyn_cast<ValueStmt>(Compound->body_back())) {
+      if (const Expr *Value = LastStmt->getExprStmt()) {
+        StmtExprMayBindToTemp = true;
+        Ty = Value->getType();
       }
     }
   }
@@ -13375,6 +13380,37 @@ Sema::ActOnStmtExpr(SourceLocation LPLoc, Stmt *SubStmt,
   if (StmtExprMayBindToTemp)
     return MaybeBindToTemporary(ResStmtExpr);
   return ResStmtExpr;
+}
+
+ExprResult Sema::ActOnStmtExprResult(ExprResult ER) {
+  if (ER.isInvalid())
+    return ExprError();
+
+  // Do function/array conversion on the last expression, but not
+  // lvalue-to-rvalue.  However, initialize an unqualified type.
+  ER = DefaultFunctionArrayConversion(ER.get());
+  if (ER.isInvalid())
+    return ExprError();
+  Expr *E = ER.get();
+
+  if (E->isTypeDependent())
+    return E;
+
+  // In ARC, if the final expression ends in a consume, splice
+  // the consume out and bind it later.  In the alternate case
+  // (when dealing with a retainable type), the result
+  // initialization will create a produce.  In both cases the
+  // result will be +1, and we'll need to balance that out with
+  // a bind.
+  auto *Cast = dyn_cast<ImplicitCastExpr>(E);
+  if (Cast && Cast->getCastKind() == CK_ARCConsumeObject)
+    return Cast->getSubExpr();
+
+  // FIXME: Provide a better location for the initialization.
+  return PerformCopyInitialization(
+      InitializedEntity::InitializeStmtExprResult(
+          E->getBeginLoc(), E->getType().getUnqualifiedType()),
+      SourceLocation(), E);
 }
 
 ExprResult Sema::BuildBuiltinOffsetOf(SourceLocation BuiltinLoc,
@@ -13904,6 +13940,11 @@ ExprResult Sema::BuildVAArgExpr(SourceLocation BuiltinLoc,
         return ExprError(Diag(E->getBeginLoc(), diag::err_va_arg_in_device));
     }
   }
+
+  // NVPTX does not support va_arg expression.
+  if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice &&
+      Context.getTargetInfo().getTriple().isNVPTX())
+    targetDiag(E->getBeginLoc(), diag::err_va_arg_in_device);
 
   // It might be a __builtin_ms_va_list. (But don't ever mark a va_arg()
   // as Microsoft ABI on an actual Microsoft platform, where
@@ -14457,14 +14498,6 @@ namespace {
     // Make sure we redo semantic analysis
     bool AlwaysRebuild() { return true; }
 
-    // Make sure we handle LabelStmts correctly.
-    // FIXME: This does the right thing, but maybe we need a more general
-    // fix to TreeTransform?
-    StmtResult TransformLabelStmt(LabelStmt *S) {
-      S->getDecl()->setStmt(nullptr);
-      return BaseTransform::TransformLabelStmt(S);
-    }
-
     // We need to special-case DeclRefExprs referring to FieldDecls which
     // are not part of a member pointer formation; normal TreeTransforming
     // doesn't catch this case because of the way we represent them in the AST.
@@ -14764,6 +14797,9 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   if (FPT && isUnresolvedExceptionSpec(FPT->getExceptionSpecType()))
     ResolveExceptionSpec(Loc, FPT);
 
+  if (getLangOpts().CUDA)
+    CheckCUDACall(Loc, Func);
+
   // If we don't need to mark the function as used, and we don't need to
   // try to provide a definition, there's nothing more to do.
   if ((Func->isUsed(/*CheckUsedAttr=*/false) || !OdrUse) &&
@@ -14881,6 +14917,9 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   }
 
   Func->markUsed(Context);
+
+  if (LangOpts.OpenMP && LangOpts.OpenMPIsDevice)
+    checkOpenMPDeviceFunction(Loc, Func);
 }
 
 static void

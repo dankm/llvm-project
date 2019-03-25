@@ -1,4 +1,4 @@
-//===- Chrootchecker.cpp -------- Basic security checks ---------*- C++ -*-===//
+//===-- ChrootChecker.cpp - chroot usage checks ---------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -151,4 +151,8 @@ void ChrootChecker::checkPreStmt(const CallExpr *CE, CheckerContext &C) const {
 
 void ento::registerChrootChecker(CheckerManager &mgr) {
   mgr.registerChecker<ChrootChecker>();
+}
+
+bool ento::shouldRegisterChrootChecker(const LangOptions &LO) {
+  return true;
 }

@@ -70,6 +70,11 @@ cl::opt<FunctionSummary::ForceSummaryHotnessType, true> FSEC(
                           "all-non-critical", "All non-critical edges."),
                clEnumValN(FunctionSummary::FSHT_All, "all", "All edges.")));
 
+cl::opt<std::string> ModuleSummaryDotFile(
+    "module-summary-dot-file", cl::init(""), cl::Hidden,
+    cl::value_desc("filename"),
+    cl::desc("File to emit dot graph of new summary into."));
+
 // Walk through the operands of a given User via worklist iteration and populate
 // the set of GlobalValue references encountered. Invoked either on an
 // Instruction or a GlobalVariable (which walks its initializer).
@@ -436,9 +441,11 @@ computeAliasSummary(ModuleSummaryIndex &Index, const GlobalAlias &A,
                                     /* Live = */ false, A.isDSOLocal());
   auto AS = llvm::make_unique<AliasSummary>(Flags);
   auto *Aliasee = A.getBaseObject();
-  auto *AliaseeSummary = Index.getGlobalValueSummary(*Aliasee);
-  assert(AliaseeSummary && "Alias expects aliasee summary to be parsed");
-  AS->setAliasee(AliaseeSummary);
+  auto AliaseeVI = Index.getValueInfo(Aliasee->getGUID());
+  assert(AliaseeVI && "Alias expects aliasee summary to be available");
+  assert(AliaseeVI.getSummaryList().size() == 1 &&
+         "Expected a single entry per aliasee in per-module index");
+  AS->setAliasee(AliaseeVI, AliaseeVI.getSummaryList()[0].get());
   if (NonRenamableLocal)
     CantBePromoted.insert(A.getGUID());
   Index.addGlobalValueSummary(A, std::move(AS));
@@ -623,6 +630,15 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
       if (!AllCallsCanBeExternallyReferenced)
         Summary->setNotEligibleToImport();
     }
+  }
+
+  if (!ModuleSummaryDotFile.empty()) {
+    std::error_code EC;
+    raw_fd_ostream OSDot(ModuleSummaryDotFile, EC, sys::fs::OpenFlags::F_None);
+    if (EC)
+      report_fatal_error(Twine("Failed to open dot file ") +
+                         ModuleSummaryDotFile + ": " + EC.message() + "\n");
+    Index.exportToDot(OSDot);
   }
 
   return Index;

@@ -138,6 +138,12 @@ public:
     return BoxingMethod;
   }
 
+  // Indicates whether this boxed expression can be emitted as a compile-time
+  // constant.
+  bool isExpressibleAsConstantInitializer() const {
+    return !BoxingMethod && SubExpr;
+  }
+
   SourceLocation getAtLoc() const { return Range.getBegin(); }
 
   SourceLocation getBeginLoc() const LLVM_READONLY { return Range.getBegin(); }
@@ -1179,6 +1185,13 @@ public:
   /// Determine the kind of receiver that this message is being
   /// sent to.
   ReceiverKind getReceiverKind() const { return (ReceiverKind)Kind; }
+
+  /// \return the return type of the message being sent.
+  /// This is not always the type of the message expression itself because
+  /// of references (the expression would not have a reference type).
+  /// It is also not always the declared return type of the method because
+  /// of `instancetype` (in that case it's an expression type).
+  QualType getCallReturnType(ASTContext &Ctx) const;
 
   /// Source range of the receiver.
   SourceRange getReceiverRange() const;

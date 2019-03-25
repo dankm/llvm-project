@@ -35,6 +35,7 @@ enum OpenMPClauseKind {
 #include "clang/Basic/OpenMPKinds.def"
   OMPC_threadprivate,
   OMPC_uniform,
+  OMPC_allocate,
   OMPC_unknown
 };
 
@@ -102,6 +103,22 @@ enum OpenMPMapModifierKind {
   OMPC_MAP_MODIFIER_##Name,
 #include "clang/Basic/OpenMPKinds.def"
   OMPC_MAP_MODIFIER_last
+};
+
+/// OpenMP modifier kind for 'to' clause.
+enum OpenMPToModifierKind {
+#define OPENMP_TO_MODIFIER_KIND(Name) \
+  OMPC_TO_MODIFIER_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_TO_MODIFIER_unknown
+};
+
+/// OpenMP modifier kind for 'from' clause.
+enum OpenMPFromModifierKind {
+#define OPENMP_FROM_MODIFIER_KIND(Name) \
+  OMPC_FROM_MODIFIER_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_FROM_MODIFIER_unknown
 };
 
 /// OpenMP attributes for 'dist_schedule' clause.

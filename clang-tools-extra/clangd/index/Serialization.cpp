@@ -7,9 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "Serialization.h"
-#include "Index.h"
 #include "Logger.h"
 #include "RIFF.h"
+#include "SymbolLocation.h"
+#include "SymbolOrigin.h"
 #include "Trace.h"
 #include "dex/Dex.h"
 #include "llvm/Support/Compression.h"
@@ -105,9 +106,9 @@ public:
 };
 
 void write32(uint32_t I, llvm::raw_ostream &OS) {
-  char buf[4];
-  llvm::support::endian::write32le(buf, I);
-  OS.write(buf, sizeof(buf));
+  char Buf[4];
+  llvm::support::endian::write32le(Buf, I);
+  OS.write(Buf, sizeof(Buf));
 }
 
 void writeVar(uint32_t I, llvm::raw_ostream &OS) {

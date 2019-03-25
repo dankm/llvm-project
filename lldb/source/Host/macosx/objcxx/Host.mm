@@ -56,9 +56,8 @@
 #include "lldb/Host/ConnectionFileDescriptor.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Host/HostInfo.h"
+#include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Host/ThreadLauncher.h"
-#include "lldb/Target/Process.h"
-#include "lldb/Target/ProcessLaunchInfo.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/CleanUp.h"
 #include "lldb/Utility/DataBufferHeap.h"
@@ -67,6 +66,7 @@
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NameMatches.h"
+#include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/lldb-defines.h"
@@ -1299,12 +1299,15 @@ Status Host::LaunchProcess(ProcessLaunchInfo &launch_info) {
 
   lldb::pid_t pid = LLDB_INVALID_PROCESS_ID;
 
-  if (ShouldLaunchUsingXPC(launch_info)) {
-    error = LaunchProcessXPC(exe_spec.GetPath().c_str(), launch_info, pid);
-  } else {
-    error =
-        LaunchProcessPosixSpawn(exe_spec.GetPath().c_str(), launch_info, pid);
-  }
+  // From now on we'll deal with the external (devirtualized) path.
+  auto exe_path = fs.GetExternalPath(exe_spec);
+  if (!exe_path)
+    return Status(exe_path.getError());
+
+  if (ShouldLaunchUsingXPC(launch_info))
+    error = LaunchProcessXPC(exe_path->c_str(), launch_info, pid);
+  else
+    error = LaunchProcessPosixSpawn(exe_path->c_str(), launch_info, pid);
 
   if (pid != LLDB_INVALID_PROCESS_ID) {
     // If all went well, then set the process ID into the launch info

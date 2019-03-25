@@ -102,13 +102,6 @@ def ObjCInstanceMethod : SubsetSubject<ObjCMethod,
                                        [{S->isInstanceMethod()}],
                                        "Objective-C instance methods">;
 
-def ObjCInterfaceDeclInitMethod : SubsetSubject<ObjCMethod,
-                               [{S->getMethodFamily() == OMF_init &&
-                                 (isa<ObjCInterfaceDecl>(S->getDeclContext()) ||
-                                  (isa<ObjCCategoryDecl>(S->getDeclContext()) &&
-            cast<ObjCCategoryDecl>(S->getDeclContext())->IsClassExtension()))}],
-            "init methods of interface or class extension declarations">;
-
 def Struct : SubsetSubject<Record,
                            [{!S->isUnion()}], "structs">;
 
@@ -331,6 +324,7 @@ def TargetMSP430 : TargetArch<["msp430"]>;
 def TargetRISCV : TargetArch<["riscv32", "riscv64"]>;
 def TargetX86 : TargetArch<["x86"]>;
 def TargetAnyX86 : TargetArch<["x86", "x86_64"]>;
+def TargetWebAssembly : TargetArch<["wasm32", "wasm64"]>;
 def TargetWindows : TargetArch<["x86", "x86_64", "arm", "thumb", "aarch64"]> {
   let OSes = ["Win32"];
 }
@@ -717,7 +711,8 @@ def Availability : InheritableAttr {
   let Args = [IdentifierArgument<"platform">, VersionArgument<"introduced">,
               VersionArgument<"deprecated">, VersionArgument<"obsoleted">,
               BoolArgument<"unavailable">, StringArgument<"message">,
-              BoolArgument<"strict">, StringArgument<"replacement">];
+              BoolArgument<"strict">, StringArgument<"replacement">,
+              IntArgument<"priority">];
   let AdditionalMembers =
 [{static llvm::StringRef getPrettyPlatformName(llvm::StringRef Platform) {
     return llvm::StringSwitch<llvm::StringRef>(Platform)
@@ -1305,6 +1300,12 @@ def MayAlias : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def MIGServerRoutine : InheritableAttr {
+  let Spellings = [Clang<"mig_server_routine">];
+  let Subjects = SubjectList<[Function, ObjCMethod, Block]>;
+  let Documentation = [MIGConventionDocs];
+}
+
 def MSABI : DeclOrTypeAttr {
   let Spellings = [GCC<"ms_abi">];
 //  let Subjects = [Function, ObjCMethod];
@@ -1483,14 +1484,14 @@ def RISCVInterrupt : InheritableAttr, TargetSpecificAttr<TargetRISCV> {
 
 def AMDGPUFlatWorkGroupSize : InheritableAttr {
   let Spellings = [Clang<"amdgpu_flat_work_group_size", 0>];
-  let Args = [UnsignedArgument<"Min">, UnsignedArgument<"Max">];
+  let Args = [ExprArgument<"Min">, ExprArgument<"Max">];
   let Documentation = [AMDGPUFlatWorkGroupSizeDocs];
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
 
 def AMDGPUWavesPerEU : InheritableAttr {
   let Spellings = [Clang<"amdgpu_waves_per_eu", 0>];
-  let Args = [UnsignedArgument<"Min">, UnsignedArgument<"Max", 1>];
+  let Args = [ExprArgument<"Min">, ExprArgument<"Max", 1>];
   let Documentation = [AMDGPUWavesPerEUDocs];
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
@@ -1507,6 +1508,22 @@ def AMDGPUNumVGPR : InheritableAttr {
   let Args = [UnsignedArgument<"NumVGPR">];
   let Documentation = [AMDGPUNumSGPRNumVGPRDocs];
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
+}
+
+def WebAssemblyImportModule : InheritableAttr,
+                              TargetSpecificAttr<TargetWebAssembly> {
+  let Spellings = [Clang<"import_module">];
+  let Args = [StringArgument<"ImportModule">];
+  let Documentation = [WebAssemblyImportModuleDocs];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+}
+
+def WebAssemblyImportName : InheritableAttr,
+                            TargetSpecificAttr<TargetWebAssembly> {
+  let Spellings = [Clang<"import_name">];
+  let Args = [StringArgument<"ImportName">];
+  let Documentation = [WebAssemblyImportNameDocs];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
 }
 
 def NoSplitStack : InheritableAttr {
@@ -1543,7 +1560,9 @@ def ReturnsNonNull : InheritableAttr {
 // pass_object_size(N) indicates that the parameter should have
 // __builtin_object_size with Type=N evaluated on the parameter at the callsite.
 def PassObjectSize : InheritableParamAttr {
-  let Spellings = [Clang<"pass_object_size">];
+  let Spellings = [Clang<"pass_object_size">,
+                   Clang<"pass_dynamic_object_size">];
+  let Accessors = [Accessor<"isDynamic", [Clang<"pass_dynamic_object_size">]>];
   let Args = [IntArgument<"Type">];
   let Subjects = SubjectList<[ParmVar]>;
   let Documentation = [PassObjectSizeDocs];
@@ -1740,6 +1759,13 @@ def ObjCRootClass : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def ObjCNonLazyClass : Attr {
+  let Spellings = [Clang<"objc_nonlazy_class">];
+  let Subjects = SubjectList<[ObjCInterface], ErrorDiag>;
+  let LangOpts = [ObjC];
+  let Documentation = [ObjCNonLazyClassDocs];
+}
+
 def ObjCSubclassingRestricted : InheritableAttr {
   let Spellings = [Clang<"objc_subclassing_restricted">];
   let Subjects = SubjectList<[ObjCInterface], ErrorDiag>;
@@ -1754,7 +1780,7 @@ def ObjCExplicitProtocolImpl : InheritableAttr {
 
 def ObjCDesignatedInitializer : Attr {
   let Spellings = [Clang<"objc_designated_initializer">];
-  let Subjects = SubjectList<[ObjCInterfaceDeclInitMethod], ErrorDiag>;
+  let Subjects = SubjectList<[ObjCMethod], ErrorDiag>;
   let Documentation = [Undocumented];
 }
 
@@ -2335,7 +2361,7 @@ def NoSanitize : InheritableAttr {
   let Documentation = [NoSanitizeDocs];
   let AdditionalMembers = [{
     SanitizerMask getMask() const {
-      SanitizerMask Mask = 0;
+      SanitizerMask Mask;
       for (auto SanitizerName : sanitizers()) {
         SanitizerMask ParsedMask =
             parseSanitizerValue(SanitizerName, /*AllowGroups=*/true);
@@ -3119,6 +3145,29 @@ def OMPDeclareTargetDecl : InheritableAttr {
       return llvm::None;
     }
   }];
+}
+
+def OMPAllocateDecl : InheritableAttr {
+  // This attribute has no spellings as it is only ever created implicitly.
+  let Spellings = [];
+  let SemaHandler = 0;
+  let Args = [
+    EnumArgument<"AllocatorType", "AllocatorTypeTy",
+                 [
+                   "omp_default_mem_alloc", "omp_large_cap_mem_alloc",
+                   "omp_const_mem_alloc", "omp_high_bw_mem_alloc",
+                   "omp_low_lat_mem_alloc", "omp_cgroup_mem_alloc",
+                   "omp_pteam_mem_alloc", "omp_thread_mem_alloc", ""
+                 ],
+                 [
+                   "OMPDefaultMemAlloc", "OMPLargeCapMemAlloc",
+                   "OMPConstMemAlloc", "OMPHighBWMemAlloc", "OMPLowLatMemAlloc",
+                   "OMPCGroupMemAlloc", "OMPPTeamMemAlloc", "OMPThreadMemAlloc",
+                   "OMPUserDefinedMemAlloc"
+                 ]>,
+    ExprArgument<"Allocator">
+  ];
+  let Documentation = [Undocumented];
 }
 
 def InternalLinkage : InheritableAttr {

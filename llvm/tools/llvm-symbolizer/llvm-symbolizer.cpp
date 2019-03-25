@@ -38,7 +38,7 @@ ClUseSymbolTable("use-symbol-table", cl::init(true),
 
 static cl::opt<FunctionNameKind> ClPrintFunctions(
     "functions", cl::init(FunctionNameKind::LinkageName),
-    cl::desc("Print function name for a given address:"), cl::ValueOptional,
+    cl::desc("Print function name for a given address"), cl::ValueOptional,
     cl::values(clEnumValN(FunctionNameKind::None, "none", "omit function name"),
                clEnumValN(FunctionNameKind::ShortName, "short",
                           "print short function name"),
@@ -58,6 +58,13 @@ static cl::opt<bool>
 static cl::opt<bool>
     ClPrintInlining("inlining", cl::init(true),
                     cl::desc("Print all inlined frames for a given address"));
+static cl::alias
+    ClPrintInliningAliasI("i", cl::desc("Alias for -inlining"),
+                          cl::NotHidden, cl::aliasopt(ClPrintInlining),
+                          cl::Grouping);
+static cl::alias
+    ClPrintInliningAliasInlines("inlines", cl::desc("Alias for -inlining"),
+                                cl::NotHidden, cl::aliasopt(ClPrintInlining));
 
 // -basenames, -s
 static cl::opt<bool> ClBasenames("basenames", cl::init(false),
@@ -127,9 +134,18 @@ static cl::opt<int> ClPrintSourceContextLines(
 static cl::opt<bool> ClVerbose("verbose", cl::init(false),
                                cl::desc("Print verbose line info"));
 
+// -adjust-vma
+static cl::opt<unsigned long long>
+    ClAdjustVMA("adjust-vma", cl::init(0), cl::value_desc("offset"),
+                cl::desc("Add specified offset to object file addresses"));
+
 static cl::list<std::string> ClInputAddresses(cl::Positional,
                                               cl::desc("<input addresses>..."),
                                               cl::ZeroOrMore);
+
+static cl::opt<std::string>
+    ClFallbackDebugPath("fallback-debug-path", cl::init(""),
+                        cl::desc("Fallback path for debug binaries."));
 
 template<typename T>
 static bool error(Expected<T> &ResOrErr) {
@@ -182,28 +198,32 @@ static void symbolizeInput(StringRef InputString, LLVMSymbolizer &Symbolizer,
                            DIPrinter &Printer) {
   bool IsData = false;
   std::string ModuleName;
-  uint64_t ModuleOffset = 0;
-  if (!parseCommand(StringRef(InputString), IsData, ModuleName, ModuleOffset)) {
+  uint64_t Offset = 0;
+  if (!parseCommand(StringRef(InputString), IsData, ModuleName, Offset)) {
     outs() << InputString;
     return;
   }
 
   if (ClPrintAddress) {
     outs() << "0x";
-    outs().write_hex(ModuleOffset);
+    outs().write_hex(Offset);
     StringRef Delimiter = ClPrettyPrint ? ": " : "\n";
     outs() << Delimiter;
   }
+  Offset -= ClAdjustVMA;
   if (IsData) {
-    auto ResOrErr = Symbolizer.symbolizeData(ModuleName, ModuleOffset);
+    auto ResOrErr = Symbolizer.symbolizeData(
+        ModuleName, {Offset, object::SectionedAddress::UndefSection});
     Printer << (error(ResOrErr) ? DIGlobal() : ResOrErr.get());
   } else if (ClPrintInlining) {
-    auto ResOrErr =
-        Symbolizer.symbolizeInlinedCode(ModuleName, ModuleOffset, ClDwpName);
+    auto ResOrErr = Symbolizer.symbolizeInlinedCode(
+        ModuleName, {Offset, object::SectionedAddress::UndefSection},
+        ClDwpName);
     Printer << (error(ResOrErr) ? DIInliningInfo() : ResOrErr.get());
   } else {
-    auto ResOrErr =
-        Symbolizer.symbolizeCode(ModuleName, ModuleOffset, ClDwpName);
+    auto ResOrErr = Symbolizer.symbolizeCode(
+        ModuleName, {Offset, object::SectionedAddress::UndefSection},
+        ClDwpName);
     Printer << (error(ResOrErr) ? DILineInfo() : ResOrErr.get());
   }
   outs() << "\n";
@@ -221,7 +241,8 @@ int main(int argc, char **argv) {
     ClDemangle = !ClNoDemangle;
 
   LLVMSymbolizer::Options Opts(ClPrintFunctions, ClUseSymbolTable, ClDemangle,
-                               ClUseRelativeAddress, ClDefaultArch);
+                               ClUseRelativeAddress, ClDefaultArch,
+                               ClFallbackDebugPath);
 
   for (const auto &hint : ClDsymHint) {
     if (sys::path::extension(hint) == ".dSYM") {

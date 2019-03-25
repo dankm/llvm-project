@@ -172,6 +172,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::UNDEF:                      return "undef";
   case ISD::MERGE_VALUES:               return "merge_values";
   case ISD::INLINEASM:                  return "inlineasm";
+  case ISD::INLINEASM_BR:               return "inlineasm_br";
   case ISD::EH_LABEL:                   return "eh_label";
   case ISD::HANDLENODE:                 return "handlenode";
 
@@ -300,6 +301,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::SSUBSAT:                    return "ssubsat";
   case ISD::USUBSAT:                    return "usubsat";
   case ISD::SMULFIX:                    return "smulfix";
+  case ISD::UMULFIX:                    return "umulfix";
 
   // Conversion operators.
   case ISD::SIGN_EXTEND:                return "sign_extend";
@@ -652,6 +654,36 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       OS << ", " << AM;
 
     OS << ">";
+  } else if (const MaskedLoadSDNode *MLd = dyn_cast<MaskedLoadSDNode>(this)) {
+    OS << "<";
+
+    printMemOperand(OS, *MLd->getMemOperand(), G);
+
+    bool doExt = true;
+    switch (MLd->getExtensionType()) {
+    default: doExt = false; break;
+    case ISD::EXTLOAD:  OS << ", anyext"; break;
+    case ISD::SEXTLOAD: OS << ", sext"; break;
+    case ISD::ZEXTLOAD: OS << ", zext"; break;
+    }
+    if (doExt)
+      OS << " from " << MLd->getMemoryVT().getEVTString();
+
+    if (MLd->isExpandingLoad())
+      OS << ", expanding";
+
+    OS << ">";
+  } else if (const MaskedStoreSDNode *MSt = dyn_cast<MaskedStoreSDNode>(this)) {
+    OS << "<";
+    printMemOperand(OS, *MSt->getMemOperand(), G);
+
+    if (MSt->isTruncatingStore())
+      OS << ", trunc to " << MSt->getMemoryVT().getEVTString();
+
+    if (MSt->isCompressingStore())
+      OS << ", compressing";
+
+    OS << ">";
   } else if (const MemSDNode* M = dyn_cast<MemSDNode>(this)) {
     OS << "<";
     printMemOperand(OS, *M->getMemOperand(), G);
@@ -677,6 +709,9 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
        << " -> "
        << ASC->getDestAddressSpace()
        << ']';
+  } else if (const LifetimeSDNode *LN = dyn_cast<LifetimeSDNode>(this)) {
+    if (LN->hasOffset())
+      OS << "<" << LN->getOffset() << " to " << LN->getOffset() + LN->getSize() << ">";
   }
 
   if (VerboseDAGDumping) {

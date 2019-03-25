@@ -317,6 +317,11 @@ public:
     qs.removeObjCLifetime();
     return qs;
   }
+  Qualifiers withoutAddressSpace() const {
+    Qualifiers qs = *this;
+    qs.removeAddressSpace();
+    return qs;
+  }
 
   bool hasObjCLifetime() const { return Mask & LifetimeMask; }
   ObjCLifetime getObjCLifetime() const {
@@ -1119,6 +1124,12 @@ public:
     /// overload resolution to do the copy.
     PCK_Struct
   };
+
+  /// Check if this is a non-trivial type that would cause a C struct
+  /// transitively containing this type to be non-trivial. This function can be
+  /// used to determine whether a field of this type can be declared inside a C
+  /// union.
+  bool isNonTrivialPrimitiveCType(const ASTContext &Ctx) const;
 
   /// Check if this is a non-trivial type that would cause a C struct
   /// transitively containing this type to be non-trivial to copy and return the
@@ -3901,7 +3912,7 @@ public:
     EPI.Variadic = isVariadic();
     EPI.HasTrailingReturn = hasTrailingReturn();
     EPI.ExceptionSpec.Type = getExceptionSpecType();
-    EPI.TypeQuals = getTypeQuals();
+    EPI.TypeQuals = getMethodQuals();
     EPI.RefQualifier = getRefQualifier();
     if (EPI.ExceptionSpec.Type == EST_Dynamic) {
       EPI.ExceptionSpec.Exceptions = exceptions();
@@ -4011,7 +4022,7 @@ public:
   /// Whether this function prototype has a trailing return type.
   bool hasTrailingReturn() const { return FunctionTypeBits.HasTrailingReturn; }
 
-  Qualifiers getTypeQuals() const {
+  Qualifiers getMethodQuals() const {
     if (hasExtQualifiers())
       return *getTrailingObjects<Qualifiers>();
     else

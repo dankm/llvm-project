@@ -44,8 +44,8 @@ class AnalysisOrderChecker
                      check::LiveSymbols> {
 
   bool isCallbackEnabled(AnalyzerOptions &Opts, StringRef CallbackName) const {
-    return Opts.getCheckerBooleanOption("*", false, this) ||
-        Opts.getCheckerBooleanOption(CallbackName, false, this);
+    return Opts.getCheckerBooleanOption(this, "*", false) ||
+        Opts.getCheckerBooleanOption(this, CallbackName, false);
   }
 
   bool isCallbackEnabled(CheckerContext &C, StringRef CallbackName) const {
@@ -174,4 +174,8 @@ public:
 
 void ento::registerAnalysisOrderChecker(CheckerManager &mgr) {
   mgr.registerChecker<AnalysisOrderChecker>();
+}
+
+bool ento::shouldRegisterAnalysisOrderChecker(const LangOptions &LO) {
+  return true;
 }

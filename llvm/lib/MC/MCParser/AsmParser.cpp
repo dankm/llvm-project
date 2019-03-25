@@ -426,6 +426,7 @@ private:
     DK_WEAK_DEFINITION,
     DK_WEAK_REFERENCE,
     DK_WEAK_DEF_CAN_BE_HIDDEN,
+    DK_COLD,
     DK_COMM,
     DK_COMMON,
     DK_LCOMM,
@@ -709,6 +710,9 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
   case MCObjectFileInfo::IsWasm:
     PlatformParser.reset(createWasmAsmParser());
     break;
+  case MCObjectFileInfo::IsXCOFF:
+    // TODO: Need to implement createXCOFFAsmParser for XCOFF format.
+    break;
   }
 
   PlatformParser->Initialize(*this);
@@ -844,9 +848,13 @@ bool AsmParser::enabledGenDwarfForAssembly() {
   // If we haven't encountered any .file directives (which would imply that
   // the assembler source was produced with debug info already) then emit one
   // describing the assembler source file itself.
-  if (getContext().getGenDwarfFileNumber() == 0)
+  if (getContext().getGenDwarfFileNumber() == 0) {
+    const MCDwarfFile &RootFile =
+        getContext().getMCDwarfLineTable(/*CUID=*/0).getRootFile();
     getContext().setGenDwarfFileNumber(getStreamer().EmitDwarfFileDirective(
-        0, StringRef(), getContext().getMainFileName()));
+        /*CUID=*/0, getContext().getCompilationDir(), RootFile.Name,
+        RootFile.Checksum, RootFile.Source));
+  }
   return true;
 }
 
@@ -1983,6 +1991,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
       return parseDirectiveSymbolAttribute(MCSA_WeakReference);
     case DK_WEAK_DEF_CAN_BE_HIDDEN:
       return parseDirectiveSymbolAttribute(MCSA_WeakDefAutoPrivate);
+    case DK_COLD:
+      return parseDirectiveSymbolAttribute(MCSA_Cold);
     case DK_COMM:
     case DK_COMMON:
       return parseDirectiveComm(/*IsLocal=*/false);
@@ -3364,10 +3374,11 @@ bool AsmParser::parseDirectiveFile(SMLoc DirectiveLoc) {
   }
 
   if (FileNumber == -1) {
-    if (!getContext().getAsmInfo()->hasSingleParameterDotFile())
-      return Error(DirectiveLoc,
-                   "target does not support '.file' without a number");
-    getStreamer().EmitFileDirective(Filename);
+    // Ignore the directive if there is no number and the target doesn't support
+    // numberless .file directives. This allows some portability of assembler
+    // between different object file formats.
+    if (getContext().getAsmInfo()->hasSingleParameterDotFile())
+      getStreamer().EmitFileDirective(Filename);
   } else {
     // In case there is a -g option as well as debug info from directive .file,
     // we turn off the -g option, directly use the existing debug info instead.
@@ -5035,9 +5046,9 @@ bool AsmParser::parseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined) {
     MCSymbol *Sym = getContext().lookupSymbol(Name);
 
     if (expect_defined)
-      TheCondState.CondMet = (Sym && !Sym->isUndefined());
+      TheCondState.CondMet = (Sym && !Sym->isUndefined(false));
     else
-      TheCondState.CondMet = (!Sym || Sym->isUndefined());
+      TheCondState.CondMet = (!Sym || Sym->isUndefined(false));
     TheCondState.Ignore = !TheCondState.CondMet;
   }
 
@@ -5223,6 +5234,7 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".weak_definition"] = DK_WEAK_DEFINITION;
   DirectiveKindMap[".weak_reference"] = DK_WEAK_REFERENCE;
   DirectiveKindMap[".weak_def_can_be_hidden"] = DK_WEAK_DEF_CAN_BE_HIDDEN;
+  DirectiveKindMap[".cold"] = DK_COLD;
   DirectiveKindMap[".comm"] = DK_COMM;
   DirectiveKindMap[".common"] = DK_COMMON;
   DirectiveKindMap[".lcomm"] = DK_LCOMM;

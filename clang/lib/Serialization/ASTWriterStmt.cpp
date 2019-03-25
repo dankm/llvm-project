@@ -67,6 +67,7 @@ void ASTStmtWriter::AddTemplateKWAndArgsInfo(
 }
 
 void ASTStmtWriter::VisitStmt(Stmt *S) {
+  Record.push_back(S->StmtBits.IsOMPStructuredBlock);
 }
 
 void ASTStmtWriter::VisitNullStmt(NullStmt *S) {
@@ -968,18 +969,24 @@ void ASTStmtWriter::VisitBlockExpr(BlockExpr *E) {
 
 void ASTStmtWriter::VisitGenericSelectionExpr(GenericSelectionExpr *E) {
   VisitExpr(E);
+
   Record.push_back(E->getNumAssocs());
-
-  Record.AddStmt(E->getControllingExpr());
-  for (unsigned I = 0, N = E->getNumAssocs(); I != N; ++I) {
-    Record.AddTypeSourceInfo(E->getAssocTypeSourceInfo(I));
-    Record.AddStmt(E->getAssocExpr(I));
-  }
-  Record.push_back(E->isResultDependent() ? -1U : E->getResultIndex());
-
+  Record.push_back(E->ResultIndex);
   Record.AddSourceLocation(E->getGenericLoc());
   Record.AddSourceLocation(E->getDefaultLoc());
   Record.AddSourceLocation(E->getRParenLoc());
+
+  Stmt **Stmts = E->getTrailingObjects<Stmt *>();
+  // Add 1 to account for the controlling expression which is the first
+  // expression in the trailing array of Stmt *. This is not needed for
+  // the trailing array of TypeSourceInfo *.
+  for (unsigned I = 0, N = E->getNumAssocs() + 1; I < N; ++I)
+    Record.AddStmt(Stmts[I]);
+
+  TypeSourceInfo **TSIs = E->getTrailingObjects<TypeSourceInfo *>();
+  for (unsigned I = 0, N = E->getNumAssocs(); I < N; ++I)
+    Record.AddTypeSourceInfo(TSIs[I]);
+
   Code = serialization::EXPR_GENERIC_SELECTION;
 }
 
@@ -1192,6 +1199,7 @@ void ASTStmtWriter::VisitObjCForCollectionStmt(ObjCForCollectionStmt *S) {
 }
 
 void ASTStmtWriter::VisitObjCAtCatchStmt(ObjCAtCatchStmt *S) {
+  VisitStmt(S);
   Record.AddStmt(S->getCatchBody());
   Record.AddDeclRef(S->getCatchParamDecl());
   Record.AddSourceLocation(S->getAtCatchLoc());
@@ -1200,18 +1208,21 @@ void ASTStmtWriter::VisitObjCAtCatchStmt(ObjCAtCatchStmt *S) {
 }
 
 void ASTStmtWriter::VisitObjCAtFinallyStmt(ObjCAtFinallyStmt *S) {
+  VisitStmt(S);
   Record.AddStmt(S->getFinallyBody());
   Record.AddSourceLocation(S->getAtFinallyLoc());
   Code = serialization::STMT_OBJC_FINALLY;
 }
 
 void ASTStmtWriter::VisitObjCAutoreleasePoolStmt(ObjCAutoreleasePoolStmt *S) {
+  VisitStmt(S); // FIXME: no test coverage.
   Record.AddStmt(S->getSubStmt());
   Record.AddSourceLocation(S->getAtLoc());
   Code = serialization::STMT_OBJC_AUTORELEASE_POOL;
 }
 
 void ASTStmtWriter::VisitObjCAtTryStmt(ObjCAtTryStmt *S) {
+  VisitStmt(S);
   Record.push_back(S->getNumCatchStmts());
   Record.push_back(S->getFinallyStmt() != nullptr);
   Record.AddStmt(S->getTryBody());
@@ -1224,6 +1235,7 @@ void ASTStmtWriter::VisitObjCAtTryStmt(ObjCAtTryStmt *S) {
 }
 
 void ASTStmtWriter::VisitObjCAtSynchronizedStmt(ObjCAtSynchronizedStmt *S) {
+  VisitStmt(S); // FIXME: no test coverage.
   Record.AddStmt(S->getSynchExpr());
   Record.AddStmt(S->getSynchBody());
   Record.AddSourceLocation(S->getAtSynchronizedLoc());
@@ -1231,6 +1243,7 @@ void ASTStmtWriter::VisitObjCAtSynchronizedStmt(ObjCAtSynchronizedStmt *S) {
 }
 
 void ASTStmtWriter::VisitObjCAtThrowStmt(ObjCAtThrowStmt *S) {
+  VisitStmt(S); // FIXME: no test coverage.
   Record.AddStmt(S->getThrowExpr());
   Record.AddSourceLocation(S->getThrowLoc());
   Code = serialization::STMT_OBJC_AT_THROW;

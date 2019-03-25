@@ -38,3 +38,14 @@
 
 // RUN: %clang -### -no-canonical-prefixes -target wasm32-unknown-wasi-musl --sysroot=/foo %s 2>&1 | FileCheck -check-prefix=COMPILE %s
 // COMPILE: clang{{.*}}" "-cc1" {{.*}} "-internal-isystem" "/foo/include/wasm32-wasi-musl" "-internal-isystem" "/foo/include"
+
+// Thread-related command line tests.
+
+// '-pthread' sets '-target-feature +atomics' and '--shared-memory'
+// RUN: %clang -### -no-canonical-prefixes -target wasm32-unknown-unknown --sysroot=/foo %s -fuse-ld=wasm-ld -pthread 2>&1 | FileCheck -check-prefix=PTHREAD %s
+// PTHREAD: clang{{.*}}" "-cc1" {{.*}} "-target-feature" "+atomics"
+// PTHREAD: wasm-ld{{.*}}" "-lpthread" "--shared-memory"
+
+// '-pthread' not allowed with '-mno-atomics'
+// RUN: %clang -### -no-canonical-prefixes -target wasm32-unknown-unknown --sysroot=/foo %s -pthread -mno-atomics 2>&1 | FileCheck -check-prefix=PTHREAD_NO_ATOMICS %s
+// PTHREAD_NO_ATOMICS: invalid argument '-pthread' not allowed with '-mno-atomics'

@@ -220,6 +220,8 @@ def IsNotN64    :     Predicate<"!Subtarget->isABI_N64()">;
 def RelocNotPIC :     Predicate<"!TM.isPositionIndependent()">;
 def RelocPIC    :     Predicate<"TM.isPositionIndependent()">;
 def NoNaNsFPMath :    Predicate<"TM.Options.NoNaNsFPMath">;
+def UseAbs :          Predicate<"Subtarget->inAbs2008Mode() ||"
+                                "TM.Options.NoNaNsFPMath">;
 def HasStdEnc :       Predicate<"Subtarget->hasStandardEncoding()">,
                       AssemblerPredicate<"!FeatureMips16">;
 def NotDSP :          Predicate<"!Subtarget->hasDSP()">;
@@ -2122,7 +2124,7 @@ let AdditionalPredicates = [NotInMicroMips] in {
             LW_FM<0x28>, ISA_MIPS1;
   def SH  : Store<"sh", GPR32Opnd, truncstorei16, II_SH>, MMRel, LW_FM<0x29>,
             ISA_MIPS1;
-  def SW  : Store<"sw", GPR32Opnd, store, II_SW>, MMRel, LW_FM<0x2b>, ISA_MIPS1;
+  def SW  : StdMMR6Rel, Store<"sw", GPR32Opnd, store, II_SW>, MMRel, LW_FM<0x2b>, ISA_MIPS1;
 }
 
 /// load/store left/right

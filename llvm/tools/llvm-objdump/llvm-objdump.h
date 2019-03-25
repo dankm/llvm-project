@@ -21,6 +21,7 @@ namespace object {
 class COFFObjectFile;
 class COFFImportFile;
 class ELFObjectFileBase;
+class ELFSectionRef;
 class MachOObjectFile;
 class MachOUniversalBinary;
 class ObjectFile;
@@ -137,6 +138,8 @@ getMachORelocationValueString(const object::MachOObjectFile *Obj,
                               const object::RelocationRef &RelRef,
                               llvm::SmallVectorImpl<char> &Result);
 
+uint64_t getELFSectionLMA(const object::ELFSectionRef& Sec);
+
 void error(std::error_code ec);
 bool isRelocAddressLess(object::RelocationRef A, object::RelocationRef B);
 void parseInputMachO(StringRef Filename);
@@ -150,6 +153,7 @@ void printMachOLazyBindTable(object::MachOObjectFile *O);
 void printMachOWeakBindTable(object::MachOObjectFile *O);
 void printELFFileHeader(const object::ObjectFile *O);
 void printELFDynamicSection(const object::ObjectFile *Obj);
+void printELFSymbolVersionInfo(const object::ObjectFile *Obj);
 void printCOFFFileHeader(const object::ObjectFile *O);
 void printCOFFSymbolTable(const object::COFFImportFile *I);
 void printCOFFSymbolTable(const object::COFFObjectFile *O);

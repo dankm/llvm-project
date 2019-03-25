@@ -2168,6 +2168,10 @@ void OMPClauseEnqueue::VisitOMPSimdlenClause(const OMPSimdlenClause *C) {
   Visitor->AddStmt(C->getSimdlen());
 }
 
+void OMPClauseEnqueue::VisitOMPAllocatorClause(const OMPAllocatorClause *C) {
+  Visitor->AddStmt(C->getAllocator());
+}
+
 void OMPClauseEnqueue::VisitOMPCollapseClause(const OMPCollapseClause *C) {
   Visitor->AddStmt(C->getNumForLoops());
 }
@@ -3408,7 +3412,7 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
     Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions));
 
   if (options & CXTranslationUnit_KeepGoing)
-    Diags->setSuppressAfterFatalError(false);
+    Diags->setFatalsAsError(true);
 
   // Recover resources if we crash before exiting this function.
   llvm::CrashRecoveryContextCleanupRegistrar<DiagnosticsEngine,
@@ -5473,7 +5477,15 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
   case CXCursor_StaticAssert:
       return cxstring::createRef("StaticAssert");
   case CXCursor_FriendDecl:
-    return cxstring::createRef("FriendDecl");
+      return cxstring::createRef("FriendDecl");
+  case CXCursor_ConvergentAttr:
+      return cxstring::createRef("attribute(convergent)");
+  case CXCursor_WarnUnusedAttr:
+      return cxstring::createRef("attribute(warn_unused)");
+  case CXCursor_WarnUnusedResultAttr:
+      return cxstring::createRef("attribute(warn_unused_result)");
+  case CXCursor_AlignedAttr:
+      return cxstring::createRef("attribute(aligned)");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");
@@ -6227,7 +6239,9 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   case Decl::CXXDeductionGuide:
   case Decl::Import:
   case Decl::OMPThreadPrivate:
+  case Decl::OMPAllocate:
   case Decl::OMPDeclareReduction:
+  case Decl::OMPDeclareMapper:
   case Decl::OMPRequires:
   case Decl::ObjCTypeParam:
   case Decl::BuiltinTemplate:
@@ -8360,7 +8374,7 @@ unsigned clang_CXXMethod_isConst(CXCursor C) {
   const Decl *D = cxcursor::getCursorDecl(C);
   const CXXMethodDecl *Method =
       D ? dyn_cast_or_null<CXXMethodDecl>(D->getAsFunction()) : nullptr;
-  return (Method && Method->getTypeQualifiers().hasConst()) ? 1 : 0;
+  return (Method && Method->getMethodQualifiers().hasConst()) ? 1 : 0;
 }
 
 unsigned clang_CXXMethod_isDefaulted(CXCursor C) {

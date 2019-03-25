@@ -1876,6 +1876,10 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::USUBSAT,    MVT::v2i64,   2 }, // pmaxuq + psubq
     { ISD::USUBSAT,    MVT::v4i64,   2 }, // pmaxuq + psubq
     { ISD::USUBSAT,    MVT::v8i64,   2 }, // pmaxuq + psubq
+    { ISD::UADDSAT,    MVT::v16i32,  3 }, // not + pminud + paddd
+    { ISD::UADDSAT,    MVT::v2i64,   3 }, // not + pminuq + paddq
+    { ISD::UADDSAT,    MVT::v4i64,   3 }, // not + pminuq + paddq
+    { ISD::UADDSAT,    MVT::v8i64,   3 }, // not + pminuq + paddq
   };
   static const CostTblEntry XOPCostTbl[] = {
     { ISD::BITREVERSE, MVT::v4i64,   4 },
@@ -1917,6 +1921,7 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::SSUBSAT,    MVT::v32i8,   1 },
     { ISD::UADDSAT,    MVT::v16i16,  1 },
     { ISD::UADDSAT,    MVT::v32i8,   1 },
+    { ISD::UADDSAT,    MVT::v8i32,   3 }, // not + pminud + paddd
     { ISD::USUBSAT,    MVT::v16i16,  1 },
     { ISD::USUBSAT,    MVT::v32i8,   1 },
     { ISD::USUBSAT,    MVT::v8i32,   2 }, // pmaxud + psubd
@@ -1953,6 +1958,7 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::SSUBSAT,    MVT::v32i8,   4 }, // 2 x 128-bit Op + extract/insert
     { ISD::UADDSAT,    MVT::v16i16,  4 }, // 2 x 128-bit Op + extract/insert
     { ISD::UADDSAT,    MVT::v32i8,   4 }, // 2 x 128-bit Op + extract/insert
+    { ISD::UADDSAT,    MVT::v8i32,   8 }, // 2 x 128-bit Op + extract/insert
     { ISD::USUBSAT,    MVT::v16i16,  4 }, // 2 x 128-bit Op + extract/insert
     { ISD::USUBSAT,    MVT::v32i8,   4 }, // 2 x 128-bit Op + extract/insert
     { ISD::USUBSAT,    MVT::v8i32,   6 }, // 2 x 128-bit Op + extract/insert
@@ -1977,6 +1983,7 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
   };
   static const CostTblEntry SSE42CostTbl[] = {
     { ISD::USUBSAT,    MVT::v4i32,   2 }, // pmaxud + psubd
+    { ISD::UADDSAT,    MVT::v4i32,   3 }, // not + pminud + paddd
     { ISD::FSQRT,      MVT::f32,    18 }, // Nehalem from http://www.agner.org/
     { ISD::FSQRT,      MVT::v4f32,  18 }, // Nehalem from http://www.agner.org/
   };
@@ -2037,14 +2044,23 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::FSQRT,      MVT::v4f32,  56 }, // Pentium III from http://www.agner.org/
   };
   static const CostTblEntry X64CostTbl[] = { // 64-bit targets
-    { ISD::BITREVERSE, MVT::i64,    14 }
+    { ISD::BITREVERSE, MVT::i64,    14 },
+    { ISD::SADDO,      MVT::i64,     1 },
+    { ISD::UADDO,      MVT::i64,     1 },
   };
   static const CostTblEntry X86CostTbl[] = { // 32 or 64-bit targets
     { ISD::BITREVERSE, MVT::i32,    14 },
     { ISD::BITREVERSE, MVT::i16,    14 },
-    { ISD::BITREVERSE, MVT::i8,     11 }
+    { ISD::BITREVERSE, MVT::i8,     11 },
+    { ISD::SADDO,      MVT::i32,     1 },
+    { ISD::SADDO,      MVT::i16,     1 },
+    { ISD::SADDO,      MVT::i8,      1 },
+    { ISD::UADDO,      MVT::i32,     1 },
+    { ISD::UADDO,      MVT::i16,     1 },
+    { ISD::UADDO,      MVT::i8,      1 },
   };
 
+  Type *OpTy = RetTy;
   unsigned ISD = ISD::DELETED_NODE;
   switch (IID) {
   default:
@@ -2079,11 +2095,23 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
   case Intrinsic::sqrt:
     ISD = ISD::FSQRT;
     break;
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
+    // SSUBO has same costs so don't duplicate.
+    ISD = ISD::SADDO;
+    OpTy = RetTy->getContainedType(0);
+    break;
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+    // USUBO has same costs so don't duplicate.
+    ISD = ISD::UADDO;
+    OpTy = RetTy->getContainedType(0);
+    break;
   }
 
   if (ISD != ISD::DELETED_NODE) {
     // Legalize the type.
-    std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, RetTy);
+    std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, OpTy);
     MVT MTy = LT.second;
 
     // Attempt to lookup cost.
@@ -2960,22 +2988,67 @@ bool X86TTIImpl::canMacroFuseCmp() {
 }
 
 bool X86TTIImpl::isLegalMaskedLoad(Type *DataTy) {
+  if (!ST->hasAVX())
+    return false;
+
   // The backend can't handle a single element vector.
   if (isa<VectorType>(DataTy) && DataTy->getVectorNumElements() == 1)
     return false;
   Type *ScalarTy = DataTy->getScalarType();
-  int DataWidth = isa<PointerType>(ScalarTy) ?
-    DL.getPointerSizeInBits() : ScalarTy->getPrimitiveSizeInBits();
 
-  return ((DataWidth == 32 || DataWidth == 64) && ST->hasAVX()) ||
-         ((DataWidth == 8 || DataWidth == 16) && ST->hasBWI());
+  if (ScalarTy->isPointerTy())
+    return true;
+
+  if (ScalarTy->isFloatTy() || ScalarTy->isDoubleTy())
+    return true;
+
+  if (!ScalarTy->isIntegerTy())
+    return false;
+
+  unsigned IntWidth = ScalarTy->getIntegerBitWidth();
+  return IntWidth == 32 || IntWidth == 64 ||
+         ((IntWidth == 8 || IntWidth == 16) && ST->hasBWI());
 }
 
 bool X86TTIImpl::isLegalMaskedStore(Type *DataType) {
   return isLegalMaskedLoad(DataType);
 }
 
+bool X86TTIImpl::isLegalMaskedExpandLoad(Type *DataTy) {
+  if (!isa<VectorType>(DataTy))
+    return false;
+
+  if (!ST->hasAVX512())
+    return false;
+
+  // The backend can't handle a single element vector.
+  if (DataTy->getVectorNumElements() == 1)
+    return false;
+
+  Type *ScalarTy = DataTy->getVectorElementType();
+
+  if (ScalarTy->isFloatTy() || ScalarTy->isDoubleTy())
+    return true;
+
+  if (!ScalarTy->isIntegerTy())
+    return false;
+
+  unsigned IntWidth = ScalarTy->getIntegerBitWidth();
+  return IntWidth == 32 || IntWidth == 64 ||
+         ((IntWidth == 8 || IntWidth == 16) && ST->hasVBMI2());
+}
+
+bool X86TTIImpl::isLegalMaskedCompressStore(Type *DataTy) {
+  return isLegalMaskedExpandLoad(DataTy);
+}
+
 bool X86TTIImpl::isLegalMaskedGather(Type *DataTy) {
+  // Some CPUs have better gather performance than others.
+  // TODO: Remove the explicit ST->hasAVX512()?, That would mean we would only
+  // enable gather with a -march.
+  if (!(ST->hasAVX512() || (ST->hasFastGather() && ST->hasAVX2())))
+    return false;
+
   // This function is called now in two cases: from the Loop Vectorizer
   // and from the Scalarizer.
   // When the Loop Vectorizer asks about legality of the feature,
@@ -2994,14 +3067,17 @@ bool X86TTIImpl::isLegalMaskedGather(Type *DataTy) {
       return false;
   }
   Type *ScalarTy = DataTy->getScalarType();
-  int DataWidth = isa<PointerType>(ScalarTy) ?
-    DL.getPointerSizeInBits() : ScalarTy->getPrimitiveSizeInBits();
+  if (ScalarTy->isPointerTy())
+    return true;
 
-  // Some CPUs have better gather performance than others.
-  // TODO: Remove the explicit ST->hasAVX512()?, That would mean we would only
-  // enable gather with a -march.
-  return (DataWidth == 32 || DataWidth == 64) &&
-         (ST->hasAVX512() || (ST->hasFastGather() && ST->hasAVX2()));
+  if (ScalarTy->isFloatTy() || ScalarTy->isDoubleTy())
+    return true;
+
+  if (!ScalarTy->isIntegerTy())
+    return false;
+
+  unsigned IntWidth = ScalarTy->getIntegerBitWidth();
+  return IntWidth == 32 || IntWidth == 64;
 }
 
 bool X86TTIImpl::isLegalMaskedScatter(Type *DataType) {
@@ -3030,10 +3106,25 @@ bool X86TTIImpl::areInlineCompatible(const Function *Caller,
   const FeatureBitset &CalleeBits =
       TM.getSubtargetImpl(*Callee)->getFeatureBits();
 
-  // FIXME: This is likely too limiting as it will include subtarget features
-  // that we might not care about for inlining, but it is conservatively
-  // correct.
-  return (CallerBits & CalleeBits) == CalleeBits;
+  FeatureBitset RealCallerBits = CallerBits & ~InlineFeatureIgnoreList;
+  FeatureBitset RealCalleeBits = CalleeBits & ~InlineFeatureIgnoreList;
+  return (RealCallerBits & RealCalleeBits) == RealCalleeBits;
+}
+
+bool X86TTIImpl::areFunctionArgsABICompatible(
+    const Function *Caller, const Function *Callee,
+    SmallPtrSetImpl<Argument *> &Args) const {
+  if (!BaseT::areFunctionArgsABICompatible(Caller, Callee, Args))
+    return false;
+
+  // If we get here, we know the target features match. If one function
+  // considers 512-bit vectors legal and the other does not, consider them
+  // incompatible.
+  // FIXME Look at the arguments and only consider 512 bit or larger vectors?
+  const TargetMachine &TM = getTLI()->getTargetMachine();
+
+  return TM.getSubtarget<X86Subtarget>(*Caller).useAVX512Regs() ==
+         TM.getSubtarget<X86Subtarget>(*Callee).useAVX512Regs();
 }
 
 const X86TTIImpl::TTI::MemCmpExpansionOptions *

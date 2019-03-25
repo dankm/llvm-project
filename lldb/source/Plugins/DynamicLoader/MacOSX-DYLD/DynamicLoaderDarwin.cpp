@@ -46,6 +46,8 @@
 #include <uuid/uuid.h>
 #endif
 
+#include <memory>
+
 using namespace lldb;
 using namespace lldb_private;
 
@@ -255,15 +257,7 @@ bool DynamicLoaderDarwin::UpdateImageLoadAddress(Module *module,
 
               changed = m_process->GetTarget().SetSectionLoadAddress(
                   section_sp, new_section_load_addr, warn_multiple);
-            } else {
-              Host::SystemLog(
-                  Host::eSystemLogWarning,
-                  "warning: unable to find and load segment named '%s' at "
-                  "0x%" PRIx64 " in '%s' in macosx dynamic loader plug-in.\n",
-                  info.segments[i].name.AsCString("<invalid>"),
-                  (uint64_t)new_section_load_addr,
-                  image_object_file->GetFileSpec().GetPath().c_str());
-            }
+            } 
           }
         }
 
@@ -476,7 +470,7 @@ bool DynamicLoaderDarwin::JSONImageInformationIntoImageInfo(
       image_infos[i].segments.push_back(segment);
     }
 
-    image_infos[i].uuid.SetFromStringRef(
+    image_infos[i].uuid.SetFromOptionalStringRef(
         image->GetValueForKey("uuid")->GetAsString()->GetValue());
 
     // All sections listed in the dyld image info structure will all either be
@@ -734,7 +728,7 @@ void DynamicLoaderDarwin::Segment::PutToLog(Log *log,
 }
 
 const DynamicLoaderDarwin::Segment *
-DynamicLoaderDarwin::ImageInfo::FindSegment(const ConstString &name) const {
+DynamicLoaderDarwin::ImageInfo::FindSegment(ConstString name) const {
   const size_t num_segments = segments.size();
   for (size_t i = 0; i < num_segments; ++i) {
     if (segments[i].name == name)
@@ -820,7 +814,7 @@ DynamicLoaderDarwin::GetStepThroughTrampolinePlan(Thread &thread,
     std::vector<Address> addresses;
 
     if (current_symbol->IsTrampoline()) {
-      const ConstString &trampoline_name = current_symbol->GetMangled().GetName(
+      ConstString trampoline_name = current_symbol->GetMangled().GetName(
           current_symbol->GetLanguage(), Mangled::ePreferMangled);
 
       if (trampoline_name) {
@@ -947,8 +941,8 @@ DynamicLoaderDarwin::GetStepThroughTrampolinePlan(Thread &thread,
           load_addrs.push_back(address.GetLoadAddress(target_sp.get()));
         }
       }
-      thread_plan_sp.reset(
-          new ThreadPlanRunToAddress(thread, load_addrs, stop_others));
+      thread_plan_sp = std::make_shared<ThreadPlanRunToAddress>(
+          thread, load_addrs, stop_others);
     }
   } else {
     if (log)
@@ -961,7 +955,7 @@ DynamicLoaderDarwin::GetStepThroughTrampolinePlan(Thread &thread,
 size_t DynamicLoaderDarwin::FindEquivalentSymbols(
     lldb_private::Symbol *original_symbol, lldb_private::ModuleList &images,
     lldb_private::SymbolContextList &equivalent_symbols) {
-  const ConstString &trampoline_name = original_symbol->GetMangled().GetName(
+  ConstString trampoline_name = original_symbol->GetMangled().GetName(
       original_symbol->GetLanguage(), Mangled::ePreferMangled);
   if (!trampoline_name)
     return 0;

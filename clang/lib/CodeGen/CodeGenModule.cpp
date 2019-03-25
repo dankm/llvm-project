@@ -33,6 +33,7 @@
 #include "clang/AST/Mangle.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/CodeGenOptions.h"
@@ -46,12 +47,12 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ProfileSummary.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ConvertUTF.h"
@@ -417,7 +418,9 @@ void CodeGenModule::Release() {
     OpenMPRuntime->clear();
   }
   if (PGOReader) {
-    getModule().setProfileSummary(PGOReader->getSummary().getMD(VMContext));
+    getModule().setProfileSummary(
+        PGOReader->getSummary(/* UseCS */ false).getMD(VMContext),
+        llvm::ProfileSummary::PSK_Instr);
     if (PGOStats.hasDiagnostics())
       PGOStats.reportDiagnostics(getDiags(), getCodeGenOpts().MainFileName);
   }
@@ -730,9 +733,11 @@ void CodeGenModule::setGlobalVisibility(llvm::GlobalValue *GV,
   }
   if (!D)
     return;
-  // Set visibility for definitions.
+  // Set visibility for definitions, and for declarations if requested globally
+  // or set explicitly.
   LinkageInfo LV = D->getLinkageAndVisibility();
-  if (LV.isVisibilityExplicit() || !GV->isDeclarationForLinker())
+  if (LV.isVisibilityExplicit() || getLangOpts().SetVisibilityForExternDecls ||
+      !GV->isDeclarationForLinker())
     GV->setVisibility(GetLLVMVisibility(LV.getVisibility()));
 }
 
@@ -1046,8 +1051,17 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
 
   // Keep the first result in the case of a mangling collision.
   const auto *ND = cast<NamedDecl>(GD.getDecl());
-  auto Result =
-      Manglings.insert(std::make_pair(getMangledNameImpl(*this, GD, ND), GD));
+  std::string MangledName = getMangledNameImpl(*this, GD, ND);
+
+  // Postfix kernel stub names with .stub to differentiate them from kernel
+  // names in device binaries. This is to facilitate the debugger to find
+  // the correct symbols for kernels in the device binary.
+  if (auto *FD = dyn_cast<FunctionDecl>(GD.getDecl()))
+    if (getLangOpts().HIP && !getLangOpts().CUDAIsDevice &&
+        FD->hasAttr<CUDAGlobalAttr>())
+      MangledName = MangledName + ".stub";
+
+  auto Result = Manglings.insert(std::make_pair(MangledName, GD));
   return MangledDeclNames[CanonicalGD] = Result.first->first();
 }
 
@@ -2189,6 +2203,10 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       if (MustBeEmitted(Global))
         EmitOMPDeclareReduction(DRD);
       return;
+    } else if (auto *DMD = dyn_cast<OMPDeclareMapperDecl>(Global)) {
+      if (MustBeEmitted(Global))
+        EmitOMPDeclareMapper(DMD);
+      return;
     }
   }
 
@@ -2281,35 +2299,36 @@ static bool HasNonDllImportDtor(QualType T) {
 }
 
 namespace {
-  struct FunctionIsDirectlyRecursive :
-    public RecursiveASTVisitor<FunctionIsDirectlyRecursive> {
+  struct FunctionIsDirectlyRecursive
+      : public ConstStmtVisitor<FunctionIsDirectlyRecursive, bool> {
     const StringRef Name;
     const Builtin::Context &BI;
-    bool Result;
-    FunctionIsDirectlyRecursive(StringRef N, const Builtin::Context &C) :
-      Name(N), BI(C), Result(false) {
-    }
-    typedef RecursiveASTVisitor<FunctionIsDirectlyRecursive> Base;
+    FunctionIsDirectlyRecursive(StringRef N, const Builtin::Context &C)
+        : Name(N), BI(C) {}
 
-    bool TraverseCallExpr(CallExpr *E) {
+    bool VisitCallExpr(const CallExpr *E) {
       const FunctionDecl *FD = E->getDirectCallee();
       if (!FD)
-        return true;
-      AsmLabelAttr *Attr = FD->getAttr<AsmLabelAttr>();
-      if (Attr && Name == Attr->getLabel()) {
-        Result = true;
         return false;
-      }
+      AsmLabelAttr *Attr = FD->getAttr<AsmLabelAttr>();
+      if (Attr && Name == Attr->getLabel())
+        return true;
       unsigned BuiltinID = FD->getBuiltinID();
       if (!BuiltinID || !BI.isLibFunction(BuiltinID))
-        return true;
+        return false;
       StringRef BuiltinName = BI.getName(BuiltinID);
       if (BuiltinName.startswith("__builtin_") &&
           Name == BuiltinName.slice(strlen("__builtin_"), StringRef::npos)) {
-        Result = true;
-        return false;
+        return true;
       }
-      return true;
+      return false;
+    }
+
+    bool VisitStmt(const Stmt *S) {
+      for (const Stmt *Child : S->children())
+        if (Child && this->Visit(Child))
+          return true;
+      return false;
     }
   };
 
@@ -2394,8 +2413,8 @@ CodeGenModule::isTriviallyRecursive(const FunctionDecl *FD) {
   }
 
   FunctionIsDirectlyRecursive Walker(Name, Context.BuiltinInfo);
-  Walker.TraverseFunctionDecl(const_cast<FunctionDecl*>(FD));
-  return Walker.Result;
+  const Stmt *Body = FD->getBody();
+  return Body ? Walker.Visit(Body) : false;
 }
 
 bool CodeGenModule::shouldEmitFunction(GlobalDecl GD) {
@@ -2466,10 +2485,8 @@ void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD, llvm::GlobalValue *GV) {
     if (const auto *Method = dyn_cast<CXXMethodDecl>(D)) {
       // Make sure to emit the definition(s) before we emit the thunks.
       // This is necessary for the generation of certain thunks.
-      if (const auto *CD = dyn_cast<CXXConstructorDecl>(Method))
-        ABI->emitCXXStructor(CD, getFromCtorType(GD.getCtorType()));
-      else if (const auto *DD = dyn_cast<CXXDestructorDecl>(Method))
-        ABI->emitCXXStructor(DD, getFromDtorType(GD.getDtorType()));
+      if (isa<CXXConstructorDecl>(Method) || isa<CXXDestructorDecl>(Method))
+        ABI->emitCXXStructor(GD);
       else if (FD->isMultiVersion())
         EmitMultiVersionFunctionDefinition(GD, GV);
       else
@@ -2569,8 +2586,7 @@ void CodeGenModule::emitCPUDispatchDefinition(GlobalDecl GD) {
   assert(FD && "Not a FunctionDecl?");
   const auto *DD = FD->getAttr<CPUDispatchAttr>();
   assert(DD && "Not a cpu_dispatch Function?");
-  QualType CanonTy = Context.getCanonicalType(FD->getType());
-  llvm::Type *DeclTy = getTypes().ConvertFunctionType(CanonTy, FD);
+  llvm::Type *DeclTy = getTypes().ConvertType(FD->getType());
 
   if (const auto *CXXFD = dyn_cast<CXXMethodDecl>(FD)) {
     const CGFunctionInfo &FInfo = getTypes().arrangeCXXMethodDeclaration(CXXFD);
@@ -2909,8 +2925,7 @@ llvm::Constant *CodeGenModule::GetAddrOfFunction(GlobalDecl GD,
   // If there was no specific requested type, just convert it now.
   if (!Ty) {
     const auto *FD = cast<FunctionDecl>(GD.getDecl());
-    auto CanonTy = Context.getCanonicalType(FD->getType());
-    Ty = getTypes().ConvertFunctionType(CanonTy, FD);
+    Ty = getTypes().ConvertType(FD->getType());
   }
 
   // Devirtualized destructor calls may come through here instead of via
@@ -2969,7 +2984,7 @@ GetRuntimeFunctionDecl(ASTContext &C, StringRef Name) {
 
 /// CreateRuntimeFunction - Create a new runtime function with the specified
 /// type and name.
-llvm::Constant *
+llvm::FunctionCallee
 CodeGenModule::CreateRuntimeFunction(llvm::FunctionType *FTy, StringRef Name,
                                      llvm::AttributeList ExtraAttrs,
                                      bool Local) {
@@ -2995,15 +3010,7 @@ CodeGenModule::CreateRuntimeFunction(llvm::FunctionType *FTy, StringRef Name,
     }
   }
 
-  return C;
-}
-
-/// CreateBuiltinFunction - Create a new builtin function with the specified
-/// type and name.
-llvm::Constant *
-CodeGenModule::CreateBuiltinFunction(llvm::FunctionType *FTy, StringRef Name,
-                                     llvm::AttributeList ExtraAttrs) {
-  return CreateRuntimeFunction(FTy, Name, ExtraAttrs, true);
+  return {FTy, C};
 }
 
 /// isTypeConstant - Determine whether an object of this type can be emitted
@@ -3215,6 +3222,9 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
     return getTargetCodeGenInfo().performAddrSpaceCast(*this, GV, AddrSpace,
                                                        ExpectedAS, Ty);
 
+  if (GV->isDeclaration())
+    getTargetCodeGenInfo().setTargetAttributes(D, GV, *this);
+
   return GV;
 }
 
@@ -3222,15 +3232,8 @@ llvm::Constant *
 CodeGenModule::GetAddrOfGlobal(GlobalDecl GD,
                                ForDefinition_t IsForDefinition) {
   const Decl *D = GD.getDecl();
-  if (isa<CXXConstructorDecl>(D))
-    return getAddrOfCXXStructor(cast<CXXConstructorDecl>(D),
-                                getFromCtorType(GD.getCtorType()),
-                                /*FnInfo=*/nullptr, /*FnType=*/nullptr,
-                                /*DontDefer=*/false, IsForDefinition);
-  else if (isa<CXXDestructorDecl>(D))
-    return getAddrOfCXXStructor(cast<CXXDestructorDecl>(D),
-                                getFromDtorType(GD.getDtorType()),
-                                /*FnInfo=*/nullptr, /*FnType=*/nullptr,
+  if (isa<CXXConstructorDecl>(D) || isa<CXXDestructorDecl>(D))
+    return getAddrOfCXXStructor(GD, /*FnInfo=*/nullptr, /*FnType=*/nullptr,
                                 /*DontDefer=*/false, IsForDefinition);
   else if (isa<CXXMethodDecl>(D)) {
     auto FInfo = &getTypes().arrangeCXXMethodDeclaration(
@@ -3375,6 +3378,11 @@ LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
       return LangAS::cuda_device;
   }
 
+  if (LangOpts.OpenMP) {
+    LangAS AS;
+    if (OpenMPRuntime->hasAllocateAttributeForGlobalVar(D, AS))
+      return AS;
+  }
   return getTargetCodeGenInfo().getGlobalVarAddressSpace(*this, D);
 }
 
@@ -3635,7 +3643,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
         // Extern global variables will be registered in the TU where they are
         // defined.
         if (!D->hasExternalStorage())
-          getCUDARuntime().registerDeviceVar(*GV, Flags);
+          getCUDARuntime().registerDeviceVar(D, *GV, Flags);
       } else if (D->hasAttr<CUDASharedAttr>())
         // __shared__ variables are odd. Shadows do get created, but
         // they are not registered with the CUDA runtime, so they
@@ -3778,13 +3786,15 @@ static bool isVarDeclStrongDefinition(const ASTContext &Context,
     }
   }
 
-  // Microsoft's link.exe doesn't support alignments greater than 32 for common
-  // symbols, so symbols with greater alignment requirements cannot be common.
+  // Microsoft's link.exe doesn't support alignments greater than 32 bytes for
+  // common symbols, so symbols with greater alignment requirements cannot be
+  // common.
   // Other COFF linkers (ld.bfd and LLD) support arbitrary power-of-two
   // alignments for common symbols via the aligncomm directive, so this
   // restriction only applies to MSVC environments.
   if (Context.getTargetInfo().getTriple().isKnownWindowsMSVCEnvironment() &&
-      Context.getTypeAlignIfKnown(D->getType()) > 32)
+      Context.getTypeAlignIfKnown(D->getType()) >
+          Context.toBits(CharUnits::fromQuantity(32)))
     return true;
 
   return false;
@@ -3893,9 +3903,10 @@ static void replaceUsesOfNonProtoConstant(llvm::Constant *old,
     }
 
     // Recognize calls to the function.
-    llvm::CallSite callSite(user);
+    llvm::CallBase *callSite = dyn_cast<llvm::CallBase>(user);
     if (!callSite) continue;
-    if (!callSite.isCallee(&*use)) continue;
+    if (!callSite->isCallee(&*use))
+      continue;
 
     // If the return types don't match exactly, then we can't
     // transform this call unless it's dead.
@@ -3904,18 +3915,19 @@ static void replaceUsesOfNonProtoConstant(llvm::Constant *old,
 
     // Get the call site's attribute list.
     SmallVector<llvm::AttributeSet, 8> newArgAttrs;
-    llvm::AttributeList oldAttrs = callSite.getAttributes();
+    llvm::AttributeList oldAttrs = callSite->getAttributes();
 
     // If the function was passed too few arguments, don't transform.
     unsigned newNumArgs = newFn->arg_size();
-    if (callSite.arg_size() < newNumArgs) continue;
+    if (callSite->arg_size() < newNumArgs)
+      continue;
 
     // If extra arguments were passed, we silently drop them.
     // If any of the types mismatch, we don't transform.
     unsigned argNo = 0;
     bool dontTransform = false;
     for (llvm::Argument &A : newFn->args()) {
-      if (callSite.getArgument(argNo)->getType() != A.getType()) {
+      if (callSite->getArgOperand(argNo)->getType() != A.getType()) {
         dontTransform = true;
         break;
       }
@@ -3929,35 +3941,33 @@ static void replaceUsesOfNonProtoConstant(llvm::Constant *old,
 
     // Okay, we can transform this.  Create the new call instruction and copy
     // over the required information.
-    newArgs.append(callSite.arg_begin(), callSite.arg_begin() + argNo);
+    newArgs.append(callSite->arg_begin(), callSite->arg_begin() + argNo);
 
     // Copy over any operand bundles.
-    callSite.getOperandBundlesAsDefs(newBundles);
+    callSite->getOperandBundlesAsDefs(newBundles);
 
-    llvm::CallSite newCall;
-    if (callSite.isCall()) {
-      newCall = llvm::CallInst::Create(newFn, newArgs, newBundles, "",
-                                       callSite.getInstruction());
+    llvm::CallBase *newCall;
+    if (dyn_cast<llvm::CallInst>(callSite)) {
+      newCall =
+          llvm::CallInst::Create(newFn, newArgs, newBundles, "", callSite);
     } else {
-      auto *oldInvoke = cast<llvm::InvokeInst>(callSite.getInstruction());
-      newCall = llvm::InvokeInst::Create(newFn,
-                                         oldInvoke->getNormalDest(),
-                                         oldInvoke->getUnwindDest(),
-                                         newArgs, newBundles, "",
-                                         callSite.getInstruction());
+      auto *oldInvoke = cast<llvm::InvokeInst>(callSite);
+      newCall = llvm::InvokeInst::Create(newFn, oldInvoke->getNormalDest(),
+                                         oldInvoke->getUnwindDest(), newArgs,
+                                         newBundles, "", callSite);
     }
     newArgs.clear(); // for the next iteration
 
     if (!newCall->getType()->isVoidTy())
-      newCall->takeName(callSite.getInstruction());
-    newCall.setAttributes(llvm::AttributeList::get(
+      newCall->takeName(callSite);
+    newCall->setAttributes(llvm::AttributeList::get(
         newFn->getContext(), oldAttrs.getFnAttributes(),
         oldAttrs.getRetAttributes(), newArgAttrs));
-    newCall.setCallingConv(callSite.getCallingConv());
+    newCall->setCallingConv(callSite->getCallingConv());
 
     // Finally, remove the old call, replacing any uses with the new one.
     if (!callSite->use_empty())
-      callSite->replaceAllUsesWith(newCall.getInstruction());
+      callSite->replaceAllUsesWith(newCall);
 
     // Copy debug location attached to CI.
     if (callSite->getDebugLoc())
@@ -4392,6 +4402,8 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   switch (Triple.getObjectFormat()) {
   case llvm::Triple::UnknownObjectFormat:
     llvm_unreachable("unknown file format");
+  case llvm::Triple::XCOFF:
+    llvm_unreachable("XCOFF is not yet implemented");
   case llvm::Triple::COFF:
   case llvm::Triple::ELF:
   case llvm::Triple::Wasm:
@@ -4520,7 +4532,8 @@ CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S,
     if (auto GV = *Entry) {
       if (Alignment.getQuantity() > GV->getAlignment())
         GV->setAlignment(Alignment.getQuantity());
-      return ConstantAddress(GV, Alignment);
+      return ConstantAddress(castStringLiteralToDefaultAddressSpace(*this, GV),
+                             Alignment);
     }
   }
 
@@ -4582,7 +4595,8 @@ ConstantAddress CodeGenModule::GetAddrOfConstantCString(
     if (auto GV = *Entry) {
       if (Alignment.getQuantity() > GV->getAlignment())
         GV->setAlignment(Alignment.getQuantity());
-      return ConstantAddress(GV, Alignment);
+      return ConstantAddress(castStringLiteralToDefaultAddressSpace(*this, GV),
+                             Alignment);
     }
   }
 
@@ -5046,8 +5060,15 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
     EmitOMPThreadPrivateDecl(cast<OMPThreadPrivateDecl>(D));
     break;
 
+  case Decl::OMPAllocate:
+    break;
+
   case Decl::OMPDeclareReduction:
     EmitOMPDeclareReduction(cast<OMPDeclareReductionDecl>(D));
+    break;
+
+  case Decl::OMPDeclareMapper:
+    EmitOMPDeclareMapper(cast<OMPDeclareMapperDecl>(D));
     break;
 
   case Decl::OMPRequires:

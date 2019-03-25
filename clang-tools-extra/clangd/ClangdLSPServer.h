@@ -77,6 +77,8 @@ private:
   void onCompletion(const CompletionParams &, Callback<CompletionList>);
   void onSignatureHelp(const TextDocumentPositionParams &,
                        Callback<SignatureHelp>);
+  void onGoToDeclaration(const TextDocumentPositionParams &,
+                         Callback<std::vector<Location>>);
   void onGoToDefinition(const TextDocumentPositionParams &,
                         Callback<std::vector<Location>>);
   void onReference(const ReferenceParams &, Callback<std::vector<Location>>);
@@ -91,6 +93,8 @@ private:
   void onRename(const RenameParams &, Callback<WorkspaceEdit>);
   void onHover(const TextDocumentPositionParams &,
                Callback<llvm::Optional<Hover>>);
+  void onTypeHierarchy(const TypeHierarchyParams &,
+                       Callback<llvm::Optional<TypeHierarchyItem>>);
   void onChangeConfiguration(const DidChangeConfigurationParams &);
   void onSymbolInfo(const TextDocumentPositionParams &,
                     Callback<std::vector<SymbolDetails>>);
@@ -108,6 +112,10 @@ private:
   /// compilation database is changed.
   void reparseOpenedFiles();
   void applyConfiguration(const ConfigurationSettings &Settings);
+
+  /// Sends a "publishDiagnostics" notification to the LSP client.
+  void publishDiagnostics(const URIForFile &File,
+                          std::vector<clangd::Diagnostic> Diagnostics);
 
   /// Used to indicate that the 'shutdown' request was received from the
   /// Language Server client.

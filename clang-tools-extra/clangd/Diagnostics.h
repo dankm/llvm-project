@@ -32,6 +32,10 @@ struct ClangdDiagnosticOptions {
   /// stage during which the issue was produced, e.g. "Semantic Issue" or "Parse
   /// Issue".
   bool SendDiagnosticCategory = false;
+
+  /// If true, Clangd will add a number of available fixes to the diagnostic's
+  /// message.
+  bool DisplayFixesCount = true;
 };
 
 /// Contains basic information about a diagnostic.
@@ -64,6 +68,14 @@ struct Note : DiagBase {};
 
 /// A top-level diagnostic that may have Notes and Fixes.
 struct Diag : DiagBase {
+  // Diagnostic enum ID.
+  unsigned ID;
+  // The source of this diagnostic.
+  enum Source {
+    Clang,
+    ClangTidy,
+  };
+  Source S = Clang;
   /// Elaborate on the problem, usually pointing to a related piece of code.
   std::vector<Note> Notes;
   /// *Alternative* fixes for this diagnostic, one should be chosen.
@@ -99,9 +111,15 @@ public:
   void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
                         const clang::Diagnostic &Info) override;
 
+  using DiagFixer = std::function<std::vector<Fix>(DiagnosticsEngine::Level,
+                                                   const clang::Diagnostic &)>;
+  /// If set, possibly adds fixes for diagnostics using \p Fixer.
+  void contributeFixes(DiagFixer Fixer) { this->Fixer = Fixer; }
+
 private:
   void flushLastDiag();
 
+  DiagFixer Fixer = nullptr;
   std::vector<Diag> Output;
   llvm::Optional<LangOptions> LangOpts;
   llvm::Optional<Diag> LastDiag;

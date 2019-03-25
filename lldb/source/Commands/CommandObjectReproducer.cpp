@@ -37,8 +37,13 @@ protected:
     auto &r = repro::Reproducer::Instance();
     if (auto generator = r.GetGenerator()) {
       generator->Keep();
+    } else if (r.GetLoader()) {
+      // Make this operation a NOP in replay mode.
+      result.SetStatus(eReturnStatusSuccessFinishNoResult);
+      return result.Succeeded();
     } else {
       result.AppendErrorWithFormat("Unable to get the reproducer generator");
+      result.SetStatus(eReturnStatusFailed);
       return false;
     }
 
@@ -67,12 +72,11 @@ protected:
     }
 
     auto &r = repro::Reproducer::Instance();
-    if (auto generator = r.GetGenerator()) {
+    if (r.GetGenerator()) {
       result.GetOutputStream() << "Reproducer is in capture mode.\n";
-    } else if (auto generator = r.GetLoader()) {
+    } else if (r.GetLoader()) {
       result.GetOutputStream() << "Reproducer is in replay mode.\n";
     } else {
-
       result.GetOutputStream() << "Reproducer is off.\n";
     }
 

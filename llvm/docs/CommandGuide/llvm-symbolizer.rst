@@ -91,7 +91,7 @@ OPTIONS
 
  Don't print demangled function names.
 
-.. option:: -inlining 
+.. option:: -inlining, -inlines, -i
 
  If a source code location is in an inlined function, prints all the
  inlnied frames. Defaults to true.
@@ -122,6 +122,11 @@ OPTIONS
 .. option:: -basenames, -s
 
  Strip directories when printing the file path.
+
+.. option:: -adjust-vma=<offset>
+
+ Add the specified offset to object file addresses when performing lookups. This
+ can be used to perform lookups as if the object were relocated by the offset.
 
 EXIT STATUS
 -----------

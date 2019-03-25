@@ -1,4 +1,4 @@
-//== NullDerefChecker.cpp - Null dereference checker ------------*- C++ -*--==//
+//===-- DereferenceChecker.cpp - Null dereference checker -----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -302,4 +302,8 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
 
 void ento::registerDereferenceChecker(CheckerManager &mgr) {
   mgr.registerChecker<DereferenceChecker>();
+}
+
+bool ento::shouldRegisterDereferenceChecker(const LangOptions &LO) {
+  return true;
 }

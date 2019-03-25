@@ -7,8 +7,8 @@ supported by :doc:`LibFormat` and :doc:`ClangFormat`.
 
 When using :program:`clang-format` command line utility or
 ``clang::format::reformat(...)`` functions from code, one can either use one of
-the predefined styles (LLVM, Google, Chromium, Mozilla, WebKit) or create a
-custom style by configuring specific style options.
+the predefined styles (LLVM, Google, Chromium, Mozilla, WebKit, Microsoft) or
+create a custom style by configuring specific style options.
 
 
 Configuring Style with clang-format
@@ -68,6 +68,10 @@ An example of a configuration file for multiple languages:
   Language: Proto
   # Don't format .proto files.
   DisableFormat: true
+  ---
+  Language: CSharp
+  # Use 100 columns for C#.
+  ColumnLimit: 100
   ...
 
 An easy way to get a valid ``.clang-format`` file containing all configuration
@@ -144,6 +148,9 @@ the configuration (without a prefix: ``Auto``).
   * ``WebKit``
     A style complying with `WebKit's style guide
     <https://www.webkit.org/coding/coding-style.html>`_
+  * ``Microsoft``
+    A style complying with `Microsoft's style guide
+    <https://docs.microsoft.com/en-us/visualstudio/ide/editorconfig-code-style-settings-reference?view=vs-2017>`_
 
 .. START_FORMAT_STYLE_OPTIONS
 
@@ -270,6 +277,41 @@ the configuration (without a prefix: ``Auto``).
     int a;     // My comment a      vs.     int a; // My comment a
     int b = 2; // comment  b                int b = 2; // comment about b
 
+**AllowAllArgumentsOnNextLine** (``bool``)
+  If a function call or braced initializer list doesn't fit on a
+  line, allow putting all arguments onto the next line, even if
+  ``BinPackArguments`` is ``false``.
+
+  .. code-block:: c++
+
+    true:
+    callFunction(
+        a, b, c, d);
+
+    false:
+    callFunction(a,
+                 b,
+                 c,
+                 d);
+
+**AllowAllConstructorInitializersOnNextLine** (``bool``)
+  If a constructor definition with a member initializer list doesn't
+  fit on a single line, allow putting all member initializers onto the next
+  line, if ```ConstructorInitializerAllOnOneLineOrOnePerLine``` is true.
+  Note that this parameter has no effect if
+  ```ConstructorInitializerAllOnOneLineOrOnePerLine``` is false.
+
+  .. code-block:: c++
+
+    true:
+    MyClass::MyClass() :
+        member0(0), member1(2) {}
+
+    false:
+    MyClass::MyClass() :
+        member0(0),
+        member1(2) {}
+
 **AllowAllParametersOfDeclarationOnNextLine** (``bool``)
   If the function declaration doesn't fit on a line,
   allow putting all parameters of a function declaration onto
@@ -365,10 +407,47 @@ the configuration (without a prefix: ``Auto``).
       };
       void f() { bar(); }
 
+**AllowShortIfStatementsOnASingleLine** (``ShortIfStyle``)
+  Dependent on the value, ``if (a) return 0;`` can be put on a
+  single line.
 
+  Possible values:
 
-**AllowShortIfStatementsOnASingleLine** (``bool``)
-  If ``true``, ``if (a) return;`` can be put on a single line.
+  * ``SIS_Never`` (in configuration: ``Never``)
+    Do not allow short if functions.
+
+    .. code-block:: c++
+
+       if (a)
+         return;
+       else
+         return;
+
+  * ``SIS_WithoutElse`` (in configuration: ``WithoutElse``)
+    Allow short if functions on the same line, as long as else
+    is not a compound statement.
+
+    .. code-block:: c++
+
+       if (a) return;
+       else
+         return;
+
+       if (a)
+         return;
+       else {
+         return;
+       }
+
+  * ``SIS_Always`` (in configuration: ``Always``)
+    Allow short if statements even if the else is a compound statement.
+
+    .. code-block:: c++
+
+       if (a) return;
+       else {
+          return;
+       }
 
 **AllowShortLoopsOnASingleLine** (``bool``)
   If ``true``, ``while (true) continue;`` can be put on a single
@@ -925,19 +1004,28 @@ the configuration (without a prefix: ``Auto``).
 
     .. code-block:: c++
 
-      try {
+      try
+      {
         foo();
       }
-      catch () {
+      catch ()
+      {
       }
       void foo() { bar(); }
-      class foo {
+      class foo
+      {
       };
-      if (foo()) {
+      if (foo())
+      {
       }
-      else {
+      else
+      {
       }
-      enum X : int { A, B };
+      enum X : int
+      {
+        A,
+        B
+      };
 
   * ``BS_GNU`` (in configuration: ``GNU``)
     Always break before braces and add an extra level of indentation to
@@ -1365,6 +1453,16 @@ the configuration (without a prefix: ``Auto``).
        #  endif
        #endif
 
+  * ``PPDIS_BeforeHash`` (in configuration: ``BeforeHash``)
+    Indents directives before the hash.
+
+    .. code-block:: c++
+
+       #if FOO
+         #if BAR
+           #include <foo>
+         #endif
+       #endif
 
 
 **IndentWidth** (``unsigned``)
@@ -1495,6 +1593,9 @@ the configuration (without a prefix: ``Auto``).
 
   * ``LK_Cpp`` (in configuration: ``Cpp``)
     Should be used for C, C++.
+
+  * ``LK_CSharp`` (in configuration: ``CSharp``)
+    Should be used for C#.
 
   * ``LK_Java`` (in configuration: ``Java``)
     Should be used for Java.

@@ -44,12 +44,12 @@ struct Range {
 
 class MinidumpParser {
 public:
-  static llvm::Optional<MinidumpParser>
+  static llvm::Expected<MinidumpParser>
   Create(const lldb::DataBufferSP &data_buf_sp);
 
   llvm::ArrayRef<uint8_t> GetData();
 
-  llvm::ArrayRef<uint8_t> GetStream(MinidumpStreamType stream_type);
+  llvm::ArrayRef<uint8_t> GetStream(StreamType stream_type);
 
   llvm::Optional<std::string> GetMinidumpString(uint32_t rva);
 
@@ -92,9 +92,6 @@ public:
 
   const MemoryRegionInfos &GetMemoryRegions();
 
-  // Perform consistency checks and initialize internal data structures
-  Status Initialize();
-
   static llvm::StringRef GetStreamTypeAsString(uint32_t stream_type);
 
   const llvm::DenseMap<uint32_t, MinidumpLocationDescriptor> &
@@ -103,7 +100,9 @@ public:
   }
 
 private:
-  MinidumpParser(const lldb::DataBufferSP &data_buf_sp);
+  MinidumpParser(
+      lldb::DataBufferSP data_sp,
+      llvm::DenseMap<uint32_t, MinidumpLocationDescriptor> directory_map);
 
   MemoryRegionInfo FindMemoryRegion(lldb::addr_t load_addr) const;
 

@@ -12,6 +12,7 @@
 #include "lldb/Utility/Status.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-private-types.h"
+#include "lldb/Utility/LLDBAssert.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include <cstddef>
@@ -26,6 +27,8 @@ class Stream;
 #define BITWIDTH_INT128 128
 #define NUM_OF_WORDS_INT256 4
 #define BITWIDTH_INT256 256
+#define NUM_OF_WORDS_INT512 8
+#define BITWIDTH_INT512 512
 
 namespace lldb_private {
 
@@ -49,6 +52,8 @@ public:
     e_uint128,
     e_sint256,
     e_uint256,
+    e_sint512,
+    e_uint512,
     e_float,
     e_double,
     e_long_double
@@ -97,30 +102,22 @@ public:
     case 8:
     case 16:
     case 32:
-      if (m_integer.isSignedIntN(sizeof(sint_t) * 8))
-        m_type = e_sint;
-      else
-        m_type = e_uint;
-      break;
+      m_type = e_sint;
+      return;
     case 64:
-      if (m_integer.isSignedIntN(sizeof(slonglong_t) * 8))
-        m_type = e_slonglong;
-      else
-        m_type = e_ulonglong;
-      break;
+      m_type = e_slonglong;
+      return;
     case 128:
-      if (m_integer.isSignedIntN(BITWIDTH_INT128))
-        m_type = e_sint128;
-      else
-        m_type = e_uint128;
-      break;
+      m_type = e_sint128;
+      return;
     case 256:
-      if (m_integer.isSignedIntN(BITWIDTH_INT256))
-        m_type = e_sint256;
-      else
-        m_type = e_uint256;
-      break;
+      m_type = e_sint256;
+      return;
+    case 512:
+      m_type = e_sint512;
+      return;
     }
+    lldbassert(false && "unsupported bitwidth");
   }
   Scalar(const Scalar &rhs);
   // Scalar(const RegisterValue& reg_value);
@@ -254,10 +251,6 @@ public:
   llvm::APInt SInt128(llvm::APInt &fail_value) const;
 
   llvm::APInt UInt128(const llvm::APInt &fail_value) const;
-
-  llvm::APInt SInt256(llvm::APInt &fail_value) const;
-
-  llvm::APInt UInt256(const llvm::APInt &fail_value) const;
 
   float Float(float fail_value = 0.0f) const;
 

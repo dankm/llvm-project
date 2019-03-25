@@ -26,10 +26,8 @@ entry:
 ; ASM:      	.globl	foo
 ; ASM:      foo:
 ; ASM-NEXT: 	.functype	foo (i32) -> ()
-; ASM-NEXT: 	call	bar@FUNCTION
+; ASM-NEXT: 	call	bar
 ; ASM-NEXT: 	end_function
-; ASM-NEXT: .Lfunc_end0:
-; ASM-NEXT: 	.size	foo, .Lfunc_end0-foo
 ; ASM:       	.functype	bar () -> ()
 
 
@@ -68,7 +66,7 @@ entry:
 ; CHECK-NEXT:     FunctionTypes:   [ 0 ]
 ; CHECK-NEXT:   - Type:            CODE
 ; CHECK-NEXT:     Relocations:
-; CHECK-NEXT:       - Type:            R_WEBASSEMBLY_FUNCTION_INDEX_LEB
+; CHECK-NEXT:       - Type:            R_WASM_FUNCTION_INDEX_LEB
 ; CHECK-NEXT:         Index:           1
 ; CHECK-NEXT:         Offset:          0x00000004
 ; CHECK-NEXT:     Functions:
@@ -89,4 +87,9 @@ entry:
 ; CHECK-NEXT:         Name:            bar
 ; CHECK-NEXT:         Flags:           [ UNDEFINED ]
 ; CHECK-NEXT:         Function:        0
+; CHECK-NEXT:   - Type:            CUSTOM
+; CHECK-NEXT:     Name:            target_features
+; CHECK-NEXT:     Features:
+; CHECK-NEXT:       - Prefix:          DISALLOWED
+; CHECK-NEXT:         Name:            atomics
 ; CHECK-NEXT: ...

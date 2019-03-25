@@ -19,7 +19,7 @@
 ; CHECK-NEXT: DW_AT_external  (true)
 ; CHECK-NEXT: DW_AT_decl_file (0x01)
 ; CHECK-NEXT: DW_AT_decl_line (1)
-; CHECK-NEXT: DW_AT_location  (DW_OP_GNU_const_index 0x0, DW_OP_GNU_push_tls_address)
+; CHECK-NEXT: DW_AT_location  (DW_OP_GNU_const_index 0x0, {{DW_OP_GNU_push_tls_address|DW_OP_form_tls_address}})
 
 ; ASM32:              .section        .debug_addr
 ; ASM32-NEXT: $addr_table_base0:

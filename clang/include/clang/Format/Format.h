@@ -154,6 +154,38 @@ struct FormatStyle {
   /// \endcode
   bool AlignTrailingComments;
 
+  /// \brief If a function call or braced initializer list doesn't fit on a
+  /// line, allow putting all arguments onto the next line, even if
+  /// ``BinPackArguments`` is ``false``.
+  /// \code
+  ///   true:
+  ///   callFunction(
+  ///       a, b, c, d);
+  ///
+  ///   false:
+  ///   callFunction(a,
+  ///                b,
+  ///                c,
+  ///                d);
+  /// \endcode
+  bool AllowAllArgumentsOnNextLine;
+
+  /// \brief If a constructor definition with a member initializer list doesn't
+  /// fit on a single line, allow putting all member initializers onto the next
+  /// line, if ```ConstructorInitializerAllOnOneLineOrOnePerLine``` is true.
+  /// Note that this parameter has no effect if
+  /// ```ConstructorInitializerAllOnOneLineOrOnePerLine``` is false.
+  /// \code
+  ///   true:
+  ///   MyClass::MyClass() :
+  ///       member0(0), member1(2) {}
+  ///
+  ///   false:
+  ///   MyClass::MyClass() :
+  ///       member0(0),
+  ///       member1(2) {}
+  bool AllowAllConstructorInitializersOnNextLine;
+
   /// If the function declaration doesn't fit on a line,
   /// allow putting all parameters of a function declaration onto
   /// the next line even if ``BinPackParameters`` is ``false``.
@@ -241,8 +273,38 @@ struct FormatStyle {
   /// single line.
   ShortFunctionStyle AllowShortFunctionsOnASingleLine;
 
+  /// Different styles for handling short if lines
+  enum ShortIfStyle {
+    /// Never put short ifs on the same line.
+    /// \code
+    ///   if (a)
+    ///     return ;
+    ///   else {
+    ///     return;
+    ///   }
+    /// \endcode
+    SIS_Never,
+    /// Without else put short ifs on the same line only if
+    /// the else is not a compound statement.
+    /// \code
+    ///   if (a) return;
+    ///   else
+    ///     return;
+    /// \endcode
+    SIS_WithoutElse,
+    /// Always put short ifs on the same line if
+    /// the else is not a compound statement or not.
+    /// \code
+    ///   if (a) return;
+    ///   else {
+    ///     return;
+    ///   }
+    /// \endcode
+    SIS_Always,
+  };
+
   /// If ``true``, ``if (a) return;`` can be put on a single line.
-  bool AllowShortIfStatementsOnASingleLine;
+  ShortIfStyle AllowShortIfStatementsOnASingleLine;
 
   /// If ``true``, ``while (true) continue;`` can be put on a single
   /// line.
@@ -1096,7 +1158,16 @@ struct FormatStyle {
     ///    #  endif
     ///    #endif
     /// \endcode
-    PPDIS_AfterHash
+    PPDIS_AfterHash,
+    /// Indents directives before the hash.
+    /// \code
+    ///    #if FOO
+    ///      #if BAR
+    ///        #include <foo>
+    ///      #endif
+    ///    #endif
+    /// \endcode
+    PPDIS_BeforeHash
   };
 
   /// The preprocessor directive indenting style to use.
@@ -1130,7 +1201,7 @@ struct FormatStyle {
 
   /// A vector of prefixes ordered by the desired groups for Java imports.
   ///
-  /// Each group is seperated by a newline. Static imports will also follow the
+  /// Each group is separated by a newline. Static imports will also follow the
   /// same grouping convention above all non-static imports. One group's prefix
   /// can be a subset of another - the longest prefix is always matched. Within
   /// a group, the imports are ordered lexicographically.
@@ -1219,6 +1290,8 @@ struct FormatStyle {
     LK_None,
     /// Should be used for C, C++.
     LK_Cpp,
+    /// Should be used for C#.
+    LK_CSharp,
     /// Should be used for Java.
     LK_Java,
     /// Should be used for JavaScript.
@@ -1235,6 +1308,7 @@ struct FormatStyle {
     LK_TextProto
   };
   bool isCpp() const { return Language == LK_Cpp || Language == LK_ObjC; }
+  bool isCSharp() const { return Language == LK_CSharp; }
 
   /// Language, this format style is targeted at.
   LanguageKind Language;
@@ -1719,6 +1793,9 @@ struct FormatStyle {
            AlignEscapedNewlines == R.AlignEscapedNewlines &&
            AlignOperands == R.AlignOperands &&
            AlignTrailingComments == R.AlignTrailingComments &&
+           AllowAllArgumentsOnNextLine == R.AllowAllArgumentsOnNextLine &&
+           AllowAllConstructorInitializersOnNextLine ==
+               R.AllowAllConstructorInitializersOnNextLine &&
            AllowAllParametersOfDeclarationOnNextLine ==
                R.AllowAllParametersOfDeclarationOnNextLine &&
            AllowShortBlocksOnASingleLine == R.AllowShortBlocksOnASingleLine &&
@@ -1849,7 +1926,8 @@ private:
 
 /// Returns a format style complying with the LLVM coding standards:
 /// http://llvm.org/docs/CodingStandards.html.
-FormatStyle getLLVMStyle();
+FormatStyle getLLVMStyle(
+    FormatStyle::LanguageKind Language = FormatStyle::LanguageKind::LK_Cpp);
 
 /// Returns a format style complying with one of Google's style guides:
 /// http://google-styleguide.googlecode.com/svn/trunk/cppguide.xml.
@@ -2050,6 +2128,8 @@ inline StringRef getLanguageName(FormatStyle::LanguageKind Language) {
   switch (Language) {
   case FormatStyle::LK_Cpp:
     return "C++";
+  case FormatStyle::LK_CSharp:
+    return "CSharp";
   case FormatStyle::LK_ObjC:
     return "Objective-C";
   case FormatStyle::LK_Java:
@@ -2058,6 +2138,8 @@ inline StringRef getLanguageName(FormatStyle::LanguageKind Language) {
     return "JavaScript";
   case FormatStyle::LK_Proto:
     return "Proto";
+  case FormatStyle::LK_TableGen:
+    return "TableGen";
   case FormatStyle::LK_TextProto:
     return "TextProto";
   default:

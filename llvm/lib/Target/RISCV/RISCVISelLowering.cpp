@@ -17,6 +17,7 @@
 #include "RISCVRegisterInfo.h"
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -41,6 +42,15 @@ STATISTIC(NumTailCalls, "Number of tail calls");
 RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                                          const RISCVSubtarget &STI)
     : TargetLowering(TM), Subtarget(STI) {
+
+  if (Subtarget.isRV32E())
+    report_fatal_error("Codegen not yet implemented for RV32E");
+
+  RISCVABI::ABI ABI = Subtarget.getTargetABI();
+  assert(ABI != RISCVABI::ABI_Unknown && "Improperly initialised target ABI");
+
+  if (ABI != RISCVABI::ABI_ILP32 && ABI != RISCVABI::ABI_LP64)
+    report_fatal_error("Don't know how to lower this ABI");
 
   MVT XLenVT = Subtarget.getXLenVT();
 
@@ -80,10 +90,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::SIGN_EXTEND_INREG, VT, Expand);
 
   if (Subtarget.is64Bit()) {
-    setTargetDAGCombine(ISD::SHL);
-    setTargetDAGCombine(ISD::SRL);
-    setTargetDAGCombine(ISD::SRA);
-    setTargetDAGCombine(ISD::ANY_EXTEND);
+    setOperationAction(ISD::SHL, MVT::i32, Custom);
+    setOperationAction(ISD::SRA, MVT::i32, Custom);
+    setOperationAction(ISD::SRL, MVT::i32, Custom);
   }
 
   if (!Subtarget.hasStdExtM()) {
@@ -94,6 +103,12 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::UDIV, XLenVT, Expand);
     setOperationAction(ISD::SREM, XLenVT, Expand);
     setOperationAction(ISD::UREM, XLenVT, Expand);
+  }
+
+  if (Subtarget.is64Bit() && Subtarget.hasStdExtM()) {
+    setOperationAction(ISD::SDIV, MVT::i32, Custom);
+    setOperationAction(ISD::UDIV, MVT::i32, Custom);
+    setOperationAction(ISD::UREM, MVT::i32, Custom);
   }
 
   setOperationAction(ISD::SDIVREM, XLenVT, Expand);
@@ -131,6 +146,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
     for (auto Op : FPOpToExtend)
       setOperationAction(Op, MVT::f32, Expand);
   }
+
+  if (Subtarget.hasStdExtF() && Subtarget.is64Bit())
+    setOperationAction(ISD::BITCAST, MVT::i32, Custom);
 
   if (Subtarget.hasStdExtD()) {
     setOperationAction(ISD::FMINNUM, MVT::f64, Legal);
@@ -333,6 +351,17 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     return lowerFRAMEADDR(Op, DAG);
   case ISD::RETURNADDR:
     return lowerRETURNADDR(Op, DAG);
+  case ISD::BITCAST: {
+    assert(Subtarget.is64Bit() && Subtarget.hasStdExtF() &&
+           "Unexpected custom legalisation");
+    SDLoc DL(Op);
+    SDValue Op0 = Op.getOperand(0);
+    if (Op.getValueType() != MVT::f32 || Op0.getValueType() != MVT::i32)
+      return SDValue();
+    SDValue NewOp0 = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Op0);
+    SDValue FPConv = DAG.getNode(RISCVISD::FMV_W_X_RV64, DL, MVT::f32, NewOp0);
+    return FPConv;
+  }
   }
 }
 
@@ -512,29 +541,80 @@ SDValue RISCVTargetLowering::lowerRETURNADDR(SDValue Op,
   return DAG.getCopyFromReg(DAG.getEntryNode(), DL, Reg, XLenVT);
 }
 
-// Return true if the given node is a shift with a non-constant shift amount.
-static bool isVariableShift(SDValue Val) {
-  switch (Val.getOpcode()) {
+// Returns the opcode of the target-specific SDNode that implements the 32-bit
+// form of the given Opcode.
+static RISCVISD::NodeType getRISCVWOpcode(unsigned Opcode) {
+  switch (Opcode) {
   default:
-    return false;
+    llvm_unreachable("Unexpected opcode");
   case ISD::SHL:
+    return RISCVISD::SLLW;
   case ISD::SRA:
+    return RISCVISD::SRAW;
   case ISD::SRL:
-    return Val.getOperand(1).getOpcode() != ISD::Constant;
+    return RISCVISD::SRLW;
+  case ISD::SDIV:
+    return RISCVISD::DIVW;
+  case ISD::UDIV:
+    return RISCVISD::DIVUW;
+  case ISD::UREM:
+    return RISCVISD::REMUW;
   }
 }
 
-// Returns true if the given node is an sdiv, udiv, or urem with non-constant
-// operands.
-static bool isVariableSDivUDivURem(SDValue Val) {
-  switch (Val.getOpcode()) {
+// Converts the given 32-bit operation to a target-specific SelectionDAG node.
+// Because i32 isn't a legal type for RV64, these operations would otherwise
+// be promoted to i64, making it difficult to select the SLLW/DIVUW/.../*W
+// later one because the fact the operation was originally of type i32 is
+// lost.
+static SDValue customLegalizeToWOp(SDNode *N, SelectionDAG &DAG) {
+  SDLoc DL(N);
+  RISCVISD::NodeType WOpcode = getRISCVWOpcode(N->getOpcode());
+  SDValue NewOp0 = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, N->getOperand(0));
+  SDValue NewOp1 = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, N->getOperand(1));
+  SDValue NewRes = DAG.getNode(WOpcode, DL, MVT::i64, NewOp0, NewOp1);
+  // ReplaceNodeResults requires we maintain the same type for the return value.
+  return DAG.getNode(ISD::TRUNCATE, DL, MVT::i32, NewRes);
+}
+
+void RISCVTargetLowering::ReplaceNodeResults(SDNode *N,
+                                             SmallVectorImpl<SDValue> &Results,
+                                             SelectionDAG &DAG) const {
+  SDLoc DL(N);
+  switch (N->getOpcode()) {
   default:
-    return false;
+    llvm_unreachable("Don't know how to custom type legalize this operation!");
+  case ISD::SHL:
+  case ISD::SRA:
+  case ISD::SRL:
+    assert(N->getValueType(0) == MVT::i32 && Subtarget.is64Bit() &&
+           "Unexpected custom legalisation");
+    if (N->getOperand(1).getOpcode() == ISD::Constant)
+      return;
+    Results.push_back(customLegalizeToWOp(N, DAG));
+    break;
   case ISD::SDIV:
   case ISD::UDIV:
   case ISD::UREM:
-    return Val.getOperand(0).getOpcode() != ISD::Constant &&
-           Val.getOperand(1).getOpcode() != ISD::Constant;
+    assert(N->getValueType(0) == MVT::i32 && Subtarget.is64Bit() &&
+           Subtarget.hasStdExtM() && "Unexpected custom legalisation");
+    if (N->getOperand(0).getOpcode() == ISD::Constant ||
+        N->getOperand(1).getOpcode() == ISD::Constant)
+      return;
+    Results.push_back(customLegalizeToWOp(N, DAG));
+    break;
+  case ISD::BITCAST: {
+    assert(N->getValueType(0) == MVT::i32 && Subtarget.is64Bit() &&
+           Subtarget.hasStdExtF() && "Unexpected custom legalisation");
+    SDLoc DL(N);
+    SDValue Op0 = N->getOperand(0);
+    if (Op0.getValueType() != MVT::f32)
+      return;
+    SDValue FPConv =
+        DAG.getNode(RISCVISD::FMV_X_ANYEXTW_RV64, DL, MVT::i64, Op0);
+    Results.push_back(DAG.getNode(ISD::TRUNCATE, DL, MVT::i32, FPConv));
+    break;
+  }
   }
 }
 
@@ -545,53 +625,106 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
   switch (N->getOpcode()) {
   default:
     break;
-  case ISD::SHL:
-  case ISD::SRL:
-  case ISD::SRA: {
-    assert(Subtarget.getXLen() == 64 && "Combine should be 64-bit only");
-    if (!DCI.isBeforeLegalize())
-      break;
-    SDValue RHS = N->getOperand(1);
-    if (N->getValueType(0) != MVT::i32 || RHS->getOpcode() == ISD::Constant ||
-        (RHS->getOpcode() == ISD::AssertZext &&
-         cast<VTSDNode>(RHS->getOperand(1))->getVT().getSizeInBits() <= 5))
-      break;
-    SDValue LHS = N->getOperand(0);
-    SDLoc DL(N);
-    SDValue NewRHS =
-        DAG.getNode(ISD::AssertZext, DL, RHS.getValueType(), RHS,
-                    DAG.getValueType(EVT::getIntegerVT(*DAG.getContext(), 5)));
-    return DCI.CombineTo(
-        N, DAG.getNode(N->getOpcode(), DL, LHS.getValueType(), LHS, NewRHS));
-  }
-  case ISD::ANY_EXTEND: {
-    // If any-extending an i32 variable-length shift or sdiv/udiv/urem to i64,
-    // then instead sign-extend in order to increase the chance of being able
-    // to select the sllw/srlw/sraw/divw/divuw/remuw instructions.
-    SDValue Src = N->getOperand(0);
-    if (N->getValueType(0) != MVT::i64 || Src.getValueType() != MVT::i32)
-      break;
-    if (!isVariableShift(Src) &&
-        !(Subtarget.hasStdExtM() && isVariableSDivUDivURem(Src)))
-      break;
-    SDLoc DL(N);
-    // Don't add the new node to the DAGCombiner worklist, in order to avoid
-    // an infinite cycle due to SimplifyDemandedBits converting the
-    // SIGN_EXTEND back to ANY_EXTEND.
-    return DCI.CombineTo(N, DAG.getNode(ISD::SIGN_EXTEND, DL, MVT::i64, Src),
-                         false);
-  }
   case RISCVISD::SplitF64: {
+    SDValue Op0 = N->getOperand(0);
     // If the input to SplitF64 is just BuildPairF64 then the operation is
     // redundant. Instead, use BuildPairF64's operands directly.
-    SDValue Op0 = N->getOperand(0);
-    if (Op0->getOpcode() != RISCVISD::BuildPairF64)
+    if (Op0->getOpcode() == RISCVISD::BuildPairF64)
+      return DCI.CombineTo(N, Op0.getOperand(0), Op0.getOperand(1));
+
+    SDLoc DL(N);
+    // This is a target-specific version of a DAGCombine performed in
+    // DAGCombiner::visitBITCAST. It performs the equivalent of:
+    // fold (bitconvert (fneg x)) -> (xor (bitconvert x), signbit)
+    // fold (bitconvert (fabs x)) -> (and (bitconvert x), (not signbit))
+    if (!(Op0.getOpcode() == ISD::FNEG || Op0.getOpcode() == ISD::FABS) ||
+        !Op0.getNode()->hasOneUse())
       break;
-    return DCI.CombineTo(N, Op0.getOperand(0), Op0.getOperand(1));
+    SDValue NewSplitF64 =
+        DAG.getNode(RISCVISD::SplitF64, DL, DAG.getVTList(MVT::i32, MVT::i32),
+                    Op0.getOperand(0));
+    SDValue Lo = NewSplitF64.getValue(0);
+    SDValue Hi = NewSplitF64.getValue(1);
+    APInt SignBit = APInt::getSignMask(32);
+    if (Op0.getOpcode() == ISD::FNEG) {
+      SDValue NewHi = DAG.getNode(ISD::XOR, DL, MVT::i32, Hi,
+                                  DAG.getConstant(SignBit, DL, MVT::i32));
+      return DCI.CombineTo(N, Lo, NewHi);
+    }
+    assert(Op0.getOpcode() == ISD::FABS);
+    SDValue NewHi = DAG.getNode(ISD::AND, DL, MVT::i32, Hi,
+                                DAG.getConstant(~SignBit, DL, MVT::i32));
+    return DCI.CombineTo(N, Lo, NewHi);
+  }
+  case RISCVISD::SLLW:
+  case RISCVISD::SRAW:
+  case RISCVISD::SRLW: {
+    // Only the lower 32 bits of LHS and lower 5 bits of RHS are read.
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+    APInt LHSMask = APInt::getLowBitsSet(LHS.getValueSizeInBits(), 32);
+    APInt RHSMask = APInt::getLowBitsSet(RHS.getValueSizeInBits(), 5);
+    if ((SimplifyDemandedBits(N->getOperand(0), LHSMask, DCI)) ||
+        (SimplifyDemandedBits(N->getOperand(1), RHSMask, DCI)))
+      return SDValue();
+    break;
+  }
+  case RISCVISD::FMV_X_ANYEXTW_RV64: {
+    SDLoc DL(N);
+    SDValue Op0 = N->getOperand(0);
+    // If the input to FMV_X_ANYEXTW_RV64 is just FMV_W_X_RV64 then the
+    // conversion is unnecessary and can be replaced with an ANY_EXTEND
+    // of the FMV_W_X_RV64 operand.
+    if (Op0->getOpcode() == RISCVISD::FMV_W_X_RV64) {
+      SDValue AExtOp =
+          DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Op0.getOperand(0));
+      return DCI.CombineTo(N, AExtOp);
+    }
+
+    // This is a target-specific version of a DAGCombine performed in
+    // DAGCombiner::visitBITCAST. It performs the equivalent of:
+    // fold (bitconvert (fneg x)) -> (xor (bitconvert x), signbit)
+    // fold (bitconvert (fabs x)) -> (and (bitconvert x), (not signbit))
+    if (!(Op0.getOpcode() == ISD::FNEG || Op0.getOpcode() == ISD::FABS) ||
+        !Op0.getNode()->hasOneUse())
+      break;
+    SDValue NewFMV = DAG.getNode(RISCVISD::FMV_X_ANYEXTW_RV64, DL, MVT::i64,
+                                 Op0.getOperand(0));
+    APInt SignBit = APInt::getSignMask(32).sext(64);
+    if (Op0.getOpcode() == ISD::FNEG) {
+      return DCI.CombineTo(N,
+                           DAG.getNode(ISD::XOR, DL, MVT::i64, NewFMV,
+                                       DAG.getConstant(SignBit, DL, MVT::i64)));
+    }
+    assert(Op0.getOpcode() == ISD::FABS);
+    return DCI.CombineTo(N,
+                         DAG.getNode(ISD::AND, DL, MVT::i64, NewFMV,
+                                     DAG.getConstant(~SignBit, DL, MVT::i64)));
   }
   }
 
   return SDValue();
+}
+
+unsigned RISCVTargetLowering::ComputeNumSignBitsForTargetNode(
+    SDValue Op, const APInt &DemandedElts, const SelectionDAG &DAG,
+    unsigned Depth) const {
+  switch (Op.getOpcode()) {
+  default:
+    break;
+  case RISCVISD::SLLW:
+  case RISCVISD::SRAW:
+  case RISCVISD::SRLW:
+  case RISCVISD::DIVW:
+  case RISCVISD::DIVUW:
+  case RISCVISD::REMUW:
+    // TODO: As the result is sign-extended, this is conservatively correct. A
+    // more precise answer could be calculated for SRAW depending on known
+    // bits in the shift amount.
+    return 33;
+  }
+
+  return 1;
 }
 
 static MachineBasicBlock *emitSplitF64Pseudo(MachineInstr &MI,
@@ -658,24 +791,21 @@ static MachineBasicBlock *emitBuildPairF64Pseudo(MachineInstr &MI,
   return BB;
 }
 
-MachineBasicBlock *
-RISCVTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
-                                                 MachineBasicBlock *BB) const {
+static bool isSelectPseudo(MachineInstr &MI) {
   switch (MI.getOpcode()) {
   default:
-    llvm_unreachable("Unexpected instr type to insert");
+    return false;
   case RISCV::Select_GPR_Using_CC_GPR:
   case RISCV::Select_FPR32_Using_CC_GPR:
   case RISCV::Select_FPR64_Using_CC_GPR:
-    break;
-  case RISCV::BuildPairF64Pseudo:
-    return emitBuildPairF64Pseudo(MI, BB);
-  case RISCV::SplitF64Pseudo:
-    return emitSplitF64Pseudo(MI, BB);
+    return true;
   }
+}
 
-  // To "insert" a SELECT instruction, we actually have to insert the triangle
-  // control-flow pattern.  The incoming instruction knows the destination vreg
+static MachineBasicBlock *emitSelectPseudo(MachineInstr &MI,
+                                           MachineBasicBlock *BB) {
+  // To "insert" Select_* instructions, we actually have to insert the triangle
+  // control-flow pattern.  The incoming instructions know the destination vreg
   // to set, the condition code register to branch on, the true/false values to
   // select between, and the condcode to use to select the appropriate branch.
   //
@@ -685,6 +815,54 @@ RISCVTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   //     |  IfFalseMBB
   //     | /
   //    TailMBB
+  //
+  // When we find a sequence of selects we attempt to optimize their emission
+  // by sharing the control flow. Currently we only handle cases where we have
+  // multiple selects with the exact same condition (same LHS, RHS and CC).
+  // The selects may be interleaved with other instructions if the other
+  // instructions meet some requirements we deem safe:
+  // - They are debug instructions. Otherwise,
+  // - They do not have side-effects, do not access memory and their inputs do
+  //   not depend on the results of the select pseudo-instructions.
+  // The TrueV/FalseV operands of the selects cannot depend on the result of
+  // previous selects in the sequence.
+  // These conditions could be further relaxed. See the X86 target for a
+  // related approach and more information.
+  unsigned LHS = MI.getOperand(1).getReg();
+  unsigned RHS = MI.getOperand(2).getReg();
+  auto CC = static_cast<ISD::CondCode>(MI.getOperand(3).getImm());
+
+  SmallVector<MachineInstr *, 4> SelectDebugValues;
+  SmallSet<unsigned, 4> SelectDests;
+  SelectDests.insert(MI.getOperand(0).getReg());
+
+  MachineInstr *LastSelectPseudo = &MI;
+
+  for (auto E = BB->end(), SequenceMBBI = MachineBasicBlock::iterator(MI);
+       SequenceMBBI != E; ++SequenceMBBI) {
+    if (SequenceMBBI->isDebugInstr())
+      continue;
+    else if (isSelectPseudo(*SequenceMBBI)) {
+      if (SequenceMBBI->getOperand(1).getReg() != LHS ||
+          SequenceMBBI->getOperand(2).getReg() != RHS ||
+          SequenceMBBI->getOperand(3).getImm() != CC ||
+          SelectDests.count(SequenceMBBI->getOperand(4).getReg()) ||
+          SelectDests.count(SequenceMBBI->getOperand(5).getReg()))
+        break;
+      LastSelectPseudo = &*SequenceMBBI;
+      SequenceMBBI->collectDebugValues(SelectDebugValues);
+      SelectDests.insert(SequenceMBBI->getOperand(0).getReg());
+    } else {
+      if (SequenceMBBI->hasUnmodeledSideEffects() ||
+          SequenceMBBI->mayLoadOrStore())
+        break;
+      if (llvm::any_of(SequenceMBBI->operands(), [&](MachineOperand &MO) {
+            return MO.isReg() && MO.isUse() && SelectDests.count(MO.getReg());
+          }))
+        break;
+    }
+  }
+
   const TargetInstrInfo &TII = *BB->getParent()->getSubtarget().getInstrInfo();
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
   DebugLoc DL = MI.getDebugLoc();
@@ -697,20 +875,23 @@ RISCVTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
 
   F->insert(I, IfFalseMBB);
   F->insert(I, TailMBB);
-  // Move all remaining instructions to TailMBB.
-  TailMBB->splice(TailMBB->begin(), HeadMBB,
-                  std::next(MachineBasicBlock::iterator(MI)), HeadMBB->end());
+
+  // Transfer debug instructions associated with the selects to TailMBB.
+  for (MachineInstr *DebugInstr : SelectDebugValues) {
+    TailMBB->push_back(DebugInstr->removeFromParent());
+  }
+
+  // Move all instructions after the sequence to TailMBB.
+  TailMBB->splice(TailMBB->end(), HeadMBB,
+                  std::next(LastSelectPseudo->getIterator()), HeadMBB->end());
   // Update machine-CFG edges by transferring all successors of the current
-  // block to the new block which will contain the Phi node for the select.
+  // block to the new block which will contain the Phi nodes for the selects.
   TailMBB->transferSuccessorsAndUpdatePHIs(HeadMBB);
   // Set the successors for HeadMBB.
   HeadMBB->addSuccessor(IfFalseMBB);
   HeadMBB->addSuccessor(TailMBB);
 
   // Insert appropriate branch.
-  unsigned LHS = MI.getOperand(1).getReg();
-  unsigned RHS = MI.getOperand(2).getReg();
-  auto CC = static_cast<ISD::CondCode>(MI.getOperand(3).getImm());
   unsigned Opcode = getBranchOpcodeForIntCondCode(CC);
 
   BuildMI(HeadMBB, DL, TII.get(Opcode))
@@ -721,16 +902,43 @@ RISCVTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   // IfFalseMBB just falls through to TailMBB.
   IfFalseMBB->addSuccessor(TailMBB);
 
-  // %Result = phi [ %TrueValue, HeadMBB ], [ %FalseValue, IfFalseMBB ]
-  BuildMI(*TailMBB, TailMBB->begin(), DL, TII.get(RISCV::PHI),
-          MI.getOperand(0).getReg())
-      .addReg(MI.getOperand(4).getReg())
-      .addMBB(HeadMBB)
-      .addReg(MI.getOperand(5).getReg())
-      .addMBB(IfFalseMBB);
+  // Create PHIs for all of the select pseudo-instructions.
+  auto SelectMBBI = MI.getIterator();
+  auto SelectEnd = std::next(LastSelectPseudo->getIterator());
+  auto InsertionPoint = TailMBB->begin();
+  while (SelectMBBI != SelectEnd) {
+    auto Next = std::next(SelectMBBI);
+    if (isSelectPseudo(*SelectMBBI)) {
+      // %Result = phi [ %TrueValue, HeadMBB ], [ %FalseValue, IfFalseMBB ]
+      BuildMI(*TailMBB, InsertionPoint, SelectMBBI->getDebugLoc(),
+              TII.get(RISCV::PHI), SelectMBBI->getOperand(0).getReg())
+          .addReg(SelectMBBI->getOperand(4).getReg())
+          .addMBB(HeadMBB)
+          .addReg(SelectMBBI->getOperand(5).getReg())
+          .addMBB(IfFalseMBB);
+      SelectMBBI->eraseFromParent();
+    }
+    SelectMBBI = Next;
+  }
 
-  MI.eraseFromParent(); // The pseudo instruction is gone now.
   return TailMBB;
+}
+
+MachineBasicBlock *
+RISCVTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
+                                                 MachineBasicBlock *BB) const {
+  switch (MI.getOpcode()) {
+  default:
+    llvm_unreachable("Unexpected instr type to insert");
+  case RISCV::Select_GPR_Using_CC_GPR:
+  case RISCV::Select_FPR32_Using_CC_GPR:
+  case RISCV::Select_FPR64_Using_CC_GPR:
+    return emitSelectPseudo(MI, BB);
+  case RISCV::BuildPairF64Pseudo:
+    return emitBuildPairF64Pseudo(MI, BB);
+  case RISCV::SplitF64Pseudo:
+    return emitSplitF64Pseudo(MI, BB);
+  }
 }
 
 // Calling Convention Implementation.
@@ -808,15 +1016,19 @@ static bool CC_RISCV(const DataLayout &DL, unsigned ValNo, MVT ValVT, MVT LocVT,
   unsigned XLen = DL.getLargestLegalIntTypeSizeInBits();
   assert(XLen == 32 || XLen == 64);
   MVT XLenVT = XLen == 32 ? MVT::i32 : MVT::i64;
-  if (ValVT == MVT::f32) {
-    LocVT = MVT::i32;
-    LocInfo = CCValAssign::BCvt;
-  }
 
   // Any return value split in to more than two values can't be returned
   // directly.
   if (IsRet && ValNo > 1)
     return true;
+
+  if (ValVT == MVT::f32) {
+    LocVT = XLenVT;
+    LocInfo = CCValAssign::BCvt;
+  } else if (XLen == 64 && ValVT == MVT::f64) {
+    LocVT = MVT::i64;
+    LocInfo = CCValAssign::BCvt;
+  }
 
   // If this is a variadic argument, the RISC-V calling convention requires
   // that it is assigned an 'even' or 'aligned' register if it has 8-byte
@@ -919,8 +1131,9 @@ static bool CC_RISCV(const DataLayout &DL, unsigned ValNo, MVT ValVT, MVT LocVT,
     return false;
   }
 
-  if (ValVT == MVT::f32) {
-    LocVT = MVT::f32;
+  // When an f32 or f64 is passed on the stack, no bit-conversion is needed.
+  if (ValVT == MVT::f32 || ValVT == MVT::f64) {
+    LocVT = ValVT;
     LocInfo = CCValAssign::Full;
   }
   State.addLoc(CCValAssign::getMem(ValNo, ValVT, StackOffset, LocVT, LocInfo));
@@ -982,6 +1195,10 @@ static SDValue convertLocVTToValVT(SelectionDAG &DAG, SDValue Val,
   case CCValAssign::Full:
     break;
   case CCValAssign::BCvt:
+    if (VA.getLocVT() == MVT::i64 && VA.getValVT() == MVT::f32) {
+      Val = DAG.getNode(RISCVISD::FMV_W_X_RV64, DL, MVT::f32, Val);
+      break;
+    }
     Val = DAG.getNode(ISD::BITCAST, DL, VA.getValVT(), Val);
     break;
   }
@@ -1017,6 +1234,10 @@ static SDValue convertValVTToLocVT(SelectionDAG &DAG, SDValue Val,
   case CCValAssign::Full:
     break;
   case CCValAssign::BCvt:
+    if (VA.getLocVT() == MVT::i64 && VA.getValVT() == MVT::f32) {
+      Val = DAG.getNode(RISCVISD::FMV_X_ANYEXTW_RV64, DL, MVT::i64, Val);
+      break;
+    }
     Val = DAG.getNode(ISD::BITCAST, DL, LocVT, Val);
     break;
   }
@@ -1043,6 +1264,7 @@ static SDValue unpackFromMemLoc(SelectionDAG &DAG, SDValue Chain,
     llvm_unreachable("Unexpected CCValAssign::LocInfo");
   case CCValAssign::Full:
   case CCValAssign::Indirect:
+  case CCValAssign::BCvt:
     ExtType = ISD::NON_EXTLOAD;
     break;
   }
@@ -1230,12 +1452,12 @@ SDValue RISCVTargetLowering::LowerFormalArguments(
   return Chain;
 }
 
-/// IsEligibleForTailCallOptimization - Check whether the call is eligible
+/// isEligibleForTailCallOptimization - Check whether the call is eligible
 /// for tail call optimization.
 /// Note: This is modelled after ARM's IsEligibleForTailCallOptimization.
-bool RISCVTargetLowering::IsEligibleForTailCallOptimization(
-  CCState &CCInfo, CallLoweringInfo &CLI, MachineFunction &MF,
-  const SmallVector<CCValAssign, 16> &ArgLocs) const {
+bool RISCVTargetLowering::isEligibleForTailCallOptimization(
+    CCState &CCInfo, CallLoweringInfo &CLI, MachineFunction &MF,
+    const SmallVector<CCValAssign, 16> &ArgLocs) const {
 
   auto &Callee = CLI.Callee;
   auto CalleeCC = CLI.CallConv;
@@ -1338,8 +1560,7 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   // Check if it's really possible to do a tail call.
   if (IsTailCall)
-    IsTailCall = IsEligibleForTailCallOptimization(ArgCCInfo, CLI, MF,
-                                                   ArgLocs);
+    IsTailCall = isEligibleForTailCallOptimization(ArgCCInfo, CLI, MF, ArgLocs);
 
   if (IsTailCall)
     ++NumTailCalls;
@@ -1682,6 +1903,22 @@ const char *RISCVTargetLowering::getTargetNodeName(unsigned Opcode) const {
     return "RISCVISD::SplitF64";
   case RISCVISD::TAIL:
     return "RISCVISD::TAIL";
+  case RISCVISD::SLLW:
+    return "RISCVISD::SLLW";
+  case RISCVISD::SRAW:
+    return "RISCVISD::SRAW";
+  case RISCVISD::SRLW:
+    return "RISCVISD::SRLW";
+  case RISCVISD::DIVW:
+    return "RISCVISD::DIVW";
+  case RISCVISD::DIVUW:
+    return "RISCVISD::DIVUW";
+  case RISCVISD::REMUW:
+    return "RISCVISD::REMUW";
+  case RISCVISD::FMV_W_X_RV64:
+    return "RISCVISD::FMV_W_X_RV64";
+  case RISCVISD::FMV_X_ANYEXTW_RV64:
+    return "RISCVISD::FMV_X_ANYEXTW_RV64";
   }
   return nullptr;
 }

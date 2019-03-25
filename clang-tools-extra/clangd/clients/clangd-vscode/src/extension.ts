@@ -40,6 +40,11 @@ class FileStatus {
         this.statusBarItem.show();
     }
 
+    clear() {
+        this.statuses.clear();
+        this.statusBarItem.hide();
+    }
+
     dispose() {
         this.statusBarItem.dispose();
     }
@@ -63,8 +68,18 @@ export function activate(context: vscode.ExtensionContext) {
     }
     const serverOptions: vscodelc.ServerOptions = clangd;
 
+    // Note that CUDA ('.cu') files are special. When opening files of all other
+    // extensions, VSCode would load clangd automatically. This is achieved by
+    // having a corresponding 'onLanguage:...' activation event in package.json.
+    // However, VSCode does not have CUDA as a supported language yet, so we
+    // cannot add a corresponding activationEvent for CUDA files and clangd will
+    // *not* load itself automatically on '.cu' files. When any of the files
+    // with other extensions are open, clangd will load itself and will also
+    // work on '.cu' files.
     const filePattern: string = '**/*.{' +
-        ['cpp', 'c', 'cc', 'cxx', 'c++', 'm', 'mm', 'h', 'hh', 'hpp', 'hxx', 'inc'].join() + '}';
+        ['cpp', 'c', 'cc', 'cu', 'cxx', 'c++', 'm', 'mm',
+            'h', 'hh', 'hpp', 'hxx', 'inc'].join()
+        + '}';
     const clientOptions: vscodelc.LanguageClientOptions = {
         // Register the server for C/C++ files
         documentSelector: [{ scheme: 'file', pattern: filePattern }],
@@ -112,9 +127,16 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => {
         status.updateStatus();
     }));
-    clangdClient.onReady().then(() => {
-        clangdClient.onNotification(
-            'textDocument/clangd.fileStatus',
-            (fileStatus) => { status.onFileUpdated(fileStatus); });
-    })
+    clangdClient.onDidChangeState(
+        ({ newState }) => {
+            if (newState == vscodelc.State.Running) {
+                // clangd starts or restarts after crash.
+                clangdClient.onNotification(
+                    'textDocument/clangd.fileStatus',
+                    (fileStatus) => { status.onFileUpdated(fileStatus); });
+            } else if (newState == vscodelc.State.Stopped) {
+                // Clear all cached statuses when clangd crashes.
+                status.clear();
+            }
+        })
 }

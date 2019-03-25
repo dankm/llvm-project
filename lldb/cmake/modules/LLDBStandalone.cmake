@@ -16,14 +16,45 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   find_package(Clang REQUIRED CONFIG
     HINTS "${LLDB_PATH_TO_CLANG_BUILD}" NO_CMAKE_FIND_ROOT_PATH)
 
-  # We set LLVM_MAIN_INCLUDE_DIR so that it gets included in TableGen flags.
-  set(LLVM_MAIN_INCLUDE_DIR "${LLVM_BUILD_MAIN_INCLUDE_DIR}" CACHE PATH "Path to LLVM's source include dir")
   # We set LLVM_CMAKE_PATH so that GetSVN.cmake is found correctly when building SVNVersion.inc
   set(LLVM_CMAKE_PATH ${LLVM_CMAKE_DIR} CACHE PATH "Path to LLVM CMake modules")
 
-  set(LLVM_EXTERNAL_LIT ${LLVM_TOOLS_BINARY_DIR}/llvm-lit CACHE PATH "Path to llvm-lit")
-  find_program(LLVM_TABLEGEN_EXE "llvm-tblgen" ${LLVM_TOOLS_BINARY_DIR}
-    NO_DEFAULT_PATH)
+  set(LLVM_MAIN_SRC_DIR ${LLVM_BUILD_MAIN_SRC_DIR} CACHE PATH "Path to LLVM source tree")
+  set(LLVM_MAIN_INCLUDE_DIR ${LLVM_MAIN_INCLUDE_DIR} CACHE PATH "Path to llvm/include")
+  set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIR} CACHE PATH "Path to llvm/lib")
+  set(LLVM_BINARY_DIR ${LLVM_BINARY_DIR} CACHE PATH "Path to LLVM build tree")
+
+  set(lit_file_name "llvm-lit")
+  if(CMAKE_HOST_WIN32 AND NOT CYGWIN)
+    set(lit_file_name "${lit_file_name}.py")
+  endif()
+  set(LLVM_DEFAULT_EXTERNAL_LIT "${LLVM_TOOLS_BINARY_DIR}/${lit_file_name}" CACHE PATH "Path to llvm-lit")
+
+  if(CMAKE_CROSSCOMPILING)
+    set(LLVM_NATIVE_BUILD "${LLDB_PATH_TO_LLVM_BUILD}/NATIVE")
+    if (NOT EXISTS "${LLVM_NATIVE_BUILD}")
+      message(FATAL_ERROR
+        "Attempting to cross-compile LLDB standalone but no native LLVM build
+        found. Please cross-compile LLVM as well.")
+    endif()
+
+    if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
+      set(HOST_EXECUTABLE_SUFFIX ".exe")
+    endif()
+
+    if (NOT CMAKE_CONFIGURATION_TYPES)
+      set(LLVM_TABLEGEN_EXE
+        "${LLVM_NATIVE_BUILD}/bin/llvm-tblgen${HOST_EXECUTABLE_SUFFIX}")
+    else()
+      # NOTE: LLVM NATIVE build is always built Release, as is specified in
+      # CrossCompile.cmake
+      set(LLVM_TABLEGEN_EXE
+        "${LLVM_NATIVE_BUILD}/Release/bin/llvm-tblgen${HOST_EXECUTABLE_SUFFIX}")
+    endif()
+  else()
+    find_program(LLVM_TABLEGEN_EXE "llvm-tblgen" ${LLVM_TOOLS_BINARY_DIR}
+      NO_DEFAULT_PATH)
+  endif()
 
   # They are used as destination of target generators.
   set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bin)

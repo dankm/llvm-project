@@ -492,6 +492,8 @@ Bug Fixes in This Version
   (`See patch <https://reviews.llvm.org/D152303>`_).
 - Fix crash when passing a value larger then 64 bits to the aligned attribute.
   (`#50534 <https://github.com/llvm/llvm-project/issues/50534>`_).
+- Fix lambdas in template arguments not respecting ``-fmacro-prefix-map``
+  (`#63219 <https://github.com/llvm/llvm-project/issues/63219>`_)
 
 Bug Fixes to Compiler Builtins
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
